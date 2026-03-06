@@ -201,12 +201,10 @@ class SkillRouter:
         
         # 关键词映射
         keyword_map = {
-            'browser': ['浏览器', '打开网页', '访问', '浏览'],
             'filesystem': ['文件', '目录', '文件夹', '读取', '保存'],
             'shell': ['命令', '执行', '运行', 'shell', 'bash'],
             'web': ['搜索', '查找', '查询', 'google', '百度'],
             'code': ['代码', '编程', 'python', '分析代码'],
-            '自动笔记': ['笔记', '记录', '保存到obsidian', 'obsidian'],
         }
         
         for skill_name, keywords in keyword_map.items():

@@ -36,22 +36,15 @@ def main():
     print("💡 示例对话：")
     print("-" * 60)
     
-    # 示例 1: 触发自动笔记 Skill
-    print("\n📝 示例 1: 创建笔记")
-    print("用户: 帮我创建一个关于 Python 的笔记")
-    response = agent.invoke("帮我创建一个关于 Python 的笔记", verbose=True)
+    # 示例 1: 触发 web Skill
+    print("\n🌐 示例 1: 网络搜索")
+    print("用户: 搜索一下 Python 最新版本的新特性")
+    response = agent.invoke("搜索一下 Python 最新版本的新特性", verbose=True)
     print(f"\n助手: {response}")
     
-    # 示例 2: 触发浏览器 Skill
+    # 示例 2: 触发文件系统 Skill
     print("\n" + "-" * 60)
-    print("\n🌐 示例 2: 浏览器操作")
-    print("用户: 打开浏览器访问 baidu.com")
-    response = agent.invoke("打开浏览器访问 baidu.com", verbose=True)
-    print(f"\n助手: {response}")
-    
-    # 示例 3: 触发文件系统 Skill
-    print("\n" + "-" * 60)
-    print("\n📁 示例 3: 文件操作")
+    print("\n📁 示例 2: 文件操作")
     print("用户: 列出当前目录的文件")
     response = agent.invoke("列出当前目录的文件", verbose=True)
     print(f"\n助手: {response}")

@@ -111,7 +111,6 @@ $ python main.py
 🔄 正在初始化模型...
 🔄 正在加载 Skill 元数据...
 ✓ 发现 Skill: web
-✓ 发现 Skill: 自动笔记
 
 =========================================================
 💬 开始对话
@@ -284,8 +283,7 @@ OllamaPilot 开箱即用，内置 9 大工具：
 
 ```
 skills/
-├── web/           # 网络搜索 (Docker 一键部署)
-└── 自动笔记/       # Obsidian 笔记管理
+└── web/           # 网络搜索 (Docker 一键部署)
 ```
 
 ### 创建自定义 Skill
@@ -366,12 +364,11 @@ OllamaPilot/
 │   └── tool/             # 工具加载器
 │
 ├── skills/                # Skill 目录
-│   ├── web/              # 网络搜索 (Docker)
-│   │   ├── SKILL.md
-│   │   ├── skill.py
-│   │   ├── docker-compose.yml
-│   │   └── setup-searxng.ps1
-│   └── 自动笔记/          # Obsidian 笔记
+│   └── web/              # 网络搜索 (Docker)
+│       ├── SKILL.md
+│       ├── skill.py
+│       ├── docker-compose.yml
+│       └── setup-searxng.ps1
 │
 ├── tools/                 # 内置工具
 │   ├── builtin/          # 9 大内置工具
