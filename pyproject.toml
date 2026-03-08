@@ -1,37 +1,33 @@
 [project]
-name = "base-agent-skill"
-version = "0.1.0"
-description = "基座智能体 + Skill 架构 - 基于 LangChain 1.0+ 的模块化智能体框架"
+name = "ollamapilot"
+version = "1.0.0"
+description = "基于 LangChain 1.0+ 的 Ollama 智能助手 - 模块化、可扩展、小模型优化"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 authors = [
-    {name = "BaseAgent Team"}
+    {name = "OllamaPilot Team"}
 ]
 requires-python = ">=3.9"
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
     "langchain>=1.0.0",
     "langchain-core>=1.0.0",
+    "langchain-ollama>=0.1.0",
     "langgraph>=0.2.0",
     "pydantic>=2.7.0",
+    "pyyaml>=6.0.0",
 ]
 
 [project.optional-dependencies]
-openai = ["langchain-openai>=1.0.0"]
-anthropic = ["langchain-anthropic>=1.0.0"]
-ollama = ["langchain-ollama>=1.0.0"]
-google = ["langchain-google-genai>=2.0.0"]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
@@ -40,10 +36,10 @@ dev = [
     "mypy>=1.10.0",
 ]
 
-[project.urls]
-Homepage = "https://github.com/yourusername/base-agent-skill"
-Repository = "https://github.com/yourusername/base-agent-skill"
-Documentation = "https://github.com/yourusername/base-agent-skill/blob/main/README.md"
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ollamapilot*"]
+exclude = ["tests*", "skills*", "langchain*", "deer-flow*", "base_agent*", "tools*", "examples*"]
 
 [tool.black]
 line-length = 100
@@ -53,11 +49,11 @@ target-version = ['py39', 'py310', 'py311', 'py312']
 line-length = 100
 target-version = "py39"
 select = [
-    "E",   # pycodestyle errors
-    "F",   # Pyflakes
-    "I",   # isort
-    "N",   # pep8-naming
-    "W",   # pycodestyle warnings
+    "E",
+    "F",
+    "I",
+    "N",
+    "W",
 ]
 
 [tool.mypy]

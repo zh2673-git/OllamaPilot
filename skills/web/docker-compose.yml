@@ -1,9 +1,0 @@
-services:
-  searxng:
-    image: m.daocloud.io/docker.io/searxng/searxng:latest
-    container_name: searxng
-    ports:
-      - "8080:8080"
-    environment:
-      - SEARXNG_SECRET=your-secret-key-here
-    restart: unless-stopped

@@ -1,17 +1,17 @@
-# OllamaPilot 🚀
+# OllamaPilot
 
-<div align="center">
+<p align="center">
+  <strong>基于 LangChain 1.0+ 的本地智能助手框架</strong><br>
+  <em>让 4B 小模型也能稳定执行复杂任务</em>
+</p>
 
-**让 4B 小模型也能稳定执行复杂任务的本地智能体框架**
-
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![LangChain](https://img.shields.io/badge/LangChain-1.0+-green.svg)](https://python.langchain.com/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Ollama](https://img.shields.io/badge/Ollama-Supported-red.svg)](https://ollama.com/)
-
-[English](#english) | [中文](#中文)
-
-</div>
+<p align="center">
+  <a href="#特性">特性</a> •
+  <a href="#快速开始">快速开始</a> •
+  <a href="#skill-系统">Skill 系统</a> •
+  <a href="#架构">架构</a> •
+  <a href="#测试">测试</a>
+</p>
 
 ---
 
@@ -19,813 +19,420 @@
 
 ### 🎯 三大核心优势
 
-#### 1️⃣ **完全本地运行 - 零云端依赖**
+#### 1️⃣ 完全本地运行 - 零云端依赖
+
 - 🔒 **数据隐私**：所有模型运行在本地，数据不出你的电脑
-- 💰 **零成本**：无需 API 费用，一次下载永久使用
+- 💰 **零成本**：无需 API 费用，一次下载永久使用  
 - 🚀 **4B 模型可用**：专门优化，让小模型也能干大事
 
-#### 2️⃣ **开箱即用 - 内置 9 大工具**
-```
-📁 文件系统工具  |  🔧 Shell 命令工具  |  💻 代码处理工具
-   read_file         shell_exec          code_search
-   write_file        shell_script        apply_patch
-   list_directory                         code_stats
-   search_files
-```
-**无需配置，即装即用！**
+#### 2️⃣ 基于 LangChain 1.0+ 原生实现
 
-#### 3️⃣ **Web Skill - Docker 一键部署**
-```bash
-cd skills/web
-docker-compose up -d
-```
-- ✅ **完全本地搜索**：使用 SearXNG，无需任何 API Key
-- ✅ **一键启动**：一条命令搞定搜索引擎部署
-- ✅ **隐私保护**：搜索数据完全在本地处理
+- ✅ 使用 `create_agent()` 工厂函数，代码简洁优雅
+- ✅ Skill 即 Middleware，符合 LangChain 设计哲学
+- ✅ 自动获得内置中间件（重试、限流、日志）
+- ✅ 跟随 LangChain 升级，维护简单
 
-#### 4️⃣ **Python Solver Skill - 代码执行**
-```
-用户: 计算 9797890 乘以 44322
-Agent: 调用 python_exec 工具
-结果: 434,262,080,580
-```
-- ✅ **代码执行**：直接运行 Python 代码片段
-- ✅ **数据分析**：处理 CSV、JSON、Excel 等数据
-- ✅ **计算任务**：数学计算、统计分析、算法实现
-- ✅ **安全可靠**：内置安全机制，防止危险操作
+#### 3️⃣ 渐进式 Skill 系统
 
----
-
-## 🏗️ 架构设计
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    用户交互层 (CLI)                      │
-└─────────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│              OllamaPilot 核心引擎                       │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐ │
-│  │ 模型驱动路由  │  │ 中间件链     │  │ 流式决策展示  │ │
-│  │ Auto Router  │  │ Middleware   │  │ Streaming    │ │
-│  └──────────────┘  └──────────────┘  └──────────────┘ │
-└─────────────────────────────────────────────────────────────┘
-                          │
-          ┌───────────────┼───────────────┐
-          ▼               ▼               ▼
-┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│  内置工具层  │  │  Skill 层    │  │  Web Skill   │
-│  (9个工具)   │  │  (可扩展)    │  │  (Docker)    │
-└──────────────┘  └──────────────┘  └──────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│              Ollama 本地模型 (4B-35B)                   │
-│   qwen3.5:4b  |  glm-4.7-flash  |  其他模型...        │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 🎬 4B 小模型实战演示
-
-### 实例：查询 2026 年 3 月 6 日新闻
-
-使用 **qwen3.5:4b**（仅 4B 参数）完成复杂任务的全过程：
-
-```bash
-$ python main.py
-
-=========================================================
-🤖 OllamaPilot - 本地智能体框架
-=========================================================
-
-📋 可用模型:
-----------------------------------------
-【glm-4.7-flash】  1. glm-4.7-flash:latest
-【qwen3.5】       2. qwen3.5:35b
-                  3. qwen3.5:4b    ← 选择这个！
-                  4. qwen3.5:9b
-----------------------------------------
-
-请选择模型 (1-4): 3
-✅ 已选择模型: qwen3.5:4b
-
-=========================================================
-🤖 智能助手已启动
-=========================================================
-模型: Ollama (qwen3.5:4b)
-架构: 基座Agent + Skill (模型自主决策)
----------------------------------------------------------
-
-🔄 正在初始化模型...
-🔄 正在加载 Skill 元数据...
-✓ 发现 Skill: web
-
-=========================================================
-💬 开始对话
-=========================================================
-
-你: 2026年3月6日新闻
-
-==================================================
-📝 用户: 2026年3月6日新闻
-==================================================
-
-🔍 分析意图...
-📝 模型决策过程:
-----------------------------------------
-思考: 用户想查询特定日期的新闻，需要网络搜索。
-web Skill 提供 web_search 工具，适合此任务。
-回复: web
-----------------------------------------
-✅ 决策 Skill: web
-📚 加载 Skill: web
-   策略: full | 原始: 553字 | 估计: ~287 tokens
-🔧 加载工具 (2个):
-   - web_search (local)
-   - web_fetch (local)
-✅ 已加载 9 个内置工具
-✅ 成功加载 11 个工具
-
-🔄 迭代 1/5
-💭 思维链: 用户询问未来日期的新闻，使用 web_search 搜索
-🤖 回答: {"name": "web_search", "arguments": {"query": "2026年3月6日 新闻"}}
-🔧 调用工具: web_search
-
-🔄 迭代 2/5
-💭 思维链: 搜索结果已返回，整理关键信息
-🤖 回答: 
-根据搜索结果，以下是关于2026年3月6日的新闻信息：
-
-## 📰 2026年3月6日主要新闻摘要
-
-### 🏛️ 经济主题记者会
-- **时间**：下午3时
-- **地点**：梅地亚中心新闻发布厅
-- **参与嘉宾**：国家发改委、财政部、商务部、中国人民银行、证监会相关负责人
-
-### 💰 经济政策预告
-1. **2026年经济增长目标**：4.5%-5%
-2. **居民医保补助**：人均财政补助标准提高24元
-3. **基础养老金**：月最低标准再提高20元
-
-> ⚠️ 注：以上信息来源于网络搜索结果，涉及未来日期的预测性内容。
-
-✅ 完成
-```
-
-### 🎯 实例亮点
-
-| 特性 | 说明 |
-|------|------|
-| ✅ **智能路由** | 4B 小模型准确识别意图，自动选择 web Skill |
-| ✅ **稳定输出** | 标准化 JSON 工具调用，格式规范 |
-| ✅ **自动迭代** | 系统自动处理工具调用 → 获取结果 → 整理输出 |
-| ✅ **结构化结果** | 自动生成清晰的 Markdown 格式 |
-
-### 实例：大数计算（Python Solver Skill）
-
-使用 **qwen3.5:4b** 进行精确数学计算，展示 Python Solver Skill 的能力：
-
-```bash
-$ python main.py
-
-=========================================================
-🤖 智能助手已启动 (模型驱动架构)
-=========================================================
-架构: 基座Agent + Skill (模型自主决策)
----------------------------------------------------------
-
-🔄 正在初始化模型...
-🔄 正在加载 Skill 元数据...
-✓ 发现 Skill (Markdown): python_solver
-✓ 发现 Skill (Markdown): web
-
-=========================================================
-💬 开始对话:
-
-提示: 系统会根据你的输入自动决定调用哪个 Skill
-
-你: 计算9797890乘以44322
-
-==================================================
-📝 用户: 计算9797890乘以44322
-==================================================
-
-🔍 分析意图...
-📝 模型决策过程:
-----------------------------------------
-思考: 用户的核心需求是进行具体的数值乘法运算
-（9797890 乘以 44322）。虽然这是一个简单的数学
-问题，但调用 Python 环境（如 python_exec）可以
-确保大整数计算的精确性和准确性，避免纯语言模型
-推理可能产生的错误。触发词"计算"直接命中 
-python-solver 技能的触发条件，且该技能描述中明确
-包含"计算任务"，支持使用 Python 解决各类问题。
-回复: python-solver
-----------------------------------------
-✅ 决策 Skill: python-solver
-📚 加载 Skill: python-solver
-   策略: layered | 原始: 2230字 | 估计: ~1037 tokens
-🔧 加载工具 (3个):
-   - python_exec (local)
-   - python_script (local)
-   - python_notebook (local)
-✅ 已加载 9 个内置工具
-✅ 成功加载 12 个工具
-
-🔄 迭代 1/5
-
-💭 思维链:
---------------------------------------------------
-用户要求计算一个乘法运算：9797890 * 44322。这是一
-个简单的数学计算任务，我可以直接使用 python_exec
-工具来执行这个 Python 代码。
-
-让我调用 python_exec 工具来计算这个结果。
---------------------------------------------------
-
-🤖 回答:
---------------------------------------------------
-{"name": "python_exec", "arguments": {"code": "result = 9797890 * 44322\nprint(result)"}}
-🔧 调用工具: python_exec
-
-🔄 迭代 2/5
-
-💭 思维链:
---------------------------------------------------
-用户要求计算 9797890 * 44322，我已经通过 python_exec
-工具执行了代码，得到了结果 434262080580。
-
-现在我需要给出简洁的结果说明，直接回复这个计算结果即可。
---------------------------------------------------
-
-🤖 回答:
---------------------------------------------------
-计算结果：**434,262,080,580**
-
-✅ 完成
-```
-
-### 🎯 Python Solver 实例亮点
-
-| 特性 | 说明 |
-|------|------|
-| ✅ **精确计算** | 使用 Python 执行大数运算，避免 LLM 计算错误 |
-| ✅ **触发词匹配** | "计算"关键词自动触发 python-solver Skill |
-| ✅ **代码执行** | 自动生成并执行 Python 代码 |
-| ✅ **快速响应** | 2 次迭代完成计算任务 |
+| 复杂度 | 方式 | 代码量 | 适用场景 |
+|:------:|------|:------:|----------|
+| ⭐ | **SKILL.md** | 0 行 | 简单任务，纯配置 |
+| ⭐⭐ | **Python Skill** | 20 行 | 自定义逻辑 |
+| ⭐⭐⭐ | **MCP + 自定义** | 50 行 | 复杂集成，外部服务 |
 
 ---
 
 ## 🚀 快速开始
 
-### 1. 安装 Ollama
+### 安装
 
 ```bash
-# 访问 https://ollama.com 下载并安装
-# Windows / macOS / Linux 全平台支持
-```
-
-### 2. 下载模型（推荐小模型）
-
-```bash
-# 4B 模型 - 轻量级，适合普通电脑
-ollama pull qwen3.5:4b
-
-# 或 9B 模型 - 性能更强
-ollama pull qwen3.5:9b
-
-# 或 GLM 模型
-ollama pull glm-4.7-flash:latest
-```
-
-### 3. 克隆项目并安装依赖
-
-```bash
-git clone https://github.com/yourusername/OllamaPilot.git
+git clone https://github.com/zh2673-git/OllamaPilot.git
 cd OllamaPilot
-
-pip install -e ".[ollama]"
+pip install -e .
 ```
 
-### 4. 运行
+### 最简单使用（3 行代码）
+
+```python
+from ollamapilot import init_ollama_model, create_agent
+
+model = init_ollama_model("qwen3.5:4b")
+agent = create_agent(model, skills_dir="skills")
+response = agent.invoke("明天苏州天气怎么样？")
+print(response)
+```
+
+### 运行交互式对话
 
 ```bash
 python main.py
 ```
 
-就这么简单！🎉
-
 ---
 
-## 🔧 Web Skill - Docker 一键部署
+## 🧩 Skill 系统
 
-### 为什么需要 Web Skill？
+### 方式一：SKILL.md（推荐，0 代码）
 
-OllamaPilot 内置了 9 大工具，但网络搜索需要搜索引擎支持。我们为你准备了 **完全本地化的解决方案**：
+创建 `skills/weather/SKILL.md`：
 
-### 部署步骤
-
-```bash
-# 1. 进入 web skill 目录
-cd skills/web
-
-# 2. 一键启动搜索引擎（Docker）
-docker-compose up -d
-
-# 3. 首次运行需要配置（可选）
-./setup-searxng.ps1  # Windows
-# 或
-./setup-searxng.sh     # Linux/macOS
-```
-
-### 特性
-
-- ✅ **零 API 依赖**：使用 SearXNG 开源搜索引擎
-- ✅ **完全本地**：搜索数据不经过第三方服务器
-- ✅ **一键部署**：Docker Compose 自动化配置
-- ✅ **多引擎聚合**：支持 Google、Bing、DuckDuckGo 等
-
+```yaml
+---
+name: weather
+description: 查询天气信息
+triggers: [天气, 温度, 下雨]
+tools: [web_search, web_fetch]
 ---
 
-## 📦 内置工具列表
+# 天气查询助手
 
-OllamaPilot 开箱即用，内置 9 大工具：
+你是天气查询专家，帮助用户获取天气信息。
 
-### 📁 文件系统工具 (`tools/builtin/filesystem.py`)
-
-| 工具 | 功能 | 示例 |
-|------|------|------|
-| `read_file` | 读取文件内容 | 读取配置文件、日志等 |
-| `write_file` | 写入文件内容 | 保存结果、生成代码 |
-| `list_directory` | 列出目录内容 | 浏览项目结构 |
-| `search_files` | 搜索文件 | 查找特定文件 |
-
-### 🔧 Shell 命令工具 (`tools/builtin/shell.py`)
-
-| 工具 | 功能 | 示例 |
-|------|------|------|
-| `shell_exec` | 执行 Shell 命令 | 运行测试、部署脚本 |
-| `shell_script` | 执行 Shell 脚本 | 批量处理任务 |
-
-### 💻 代码处理工具 (`tools/builtin/code.py`)
-
-| 工具 | 功能 | 示例 |
-|------|------|------|
-| `code_search` | 代码搜索 | 查找函数、类定义 |
-| `apply_patch` | 应用代码补丁 | 修复 bug、添加功能 |
-| `code_stats` | 代码统计 | 分析代码量、复杂度 |
-
----
-
-## 🧩 Skill 扩展系统
-
-### 当前可用 Skill
-
-```
-skills/
-└── web/           # 网络搜索 (Docker 一键部署)
+## 工作流程
+1. 使用 web_search 搜索城市天气
+2. 使用 web_fetch 获取详细页面
+3. 整理天气信息返回给用户
 ```
 
-### 创建自定义 Skill
+**特点**：
+- ✅ 无需写代码，纯配置驱动
+- ✅ 支持内置工具、MCP 工具、自定义工具
+- ✅ 复制到 `skills/` 目录即可使用
 
-只需 3 步：
-
-#### 1. 创建目录
-
-```bash
-mkdir skills/my_skill
-cd skills/my_skill
-```
-
-#### 2. 编写 SKILL.md
-
-```markdown
----
-name: my_skill
-description: 我的自定义技能
-tags: ["自定义", "示例"]
-triggers:
-  - "测试"
-  - "demo"
-version: "1.0.0"
-author: "Your Name"
-tools:
-  - name: my_tool
-    type: local
-    module: skills.my_skill.skill
----
-
-# My Skill
-
-## 功能描述
-这是一个示例 Skill...
-```
-
-#### 3. 实现工具（可选）
+### 方式二：Python Skill（自定义逻辑）
 
 ```python
-# skills/my_skill/skill.py
 from langchain_core.tools import tool
+from ollamapilot import Skill
 
 @tool
 def my_tool(query: str) -> str:
-    """我的工具描述"""
-    return f"结果: {query}"
+    """我的工具"""
+    return f"处理结果: {query}"
 
-TOOLS = [my_tool]
+class MySkill(Skill):
+    name = "my_skill"
+    description = "我的自定义 Skill"
+    triggers = ["关键词1", "关键词2"]
+    
+    def get_tools(self):
+        return [my_tool]
+    
+    def get_system_prompt(self):
+        return "你是专家，帮助用户..."
 ```
 
-就这么简单！系统会自动发现并加载你的 Skill。
+### 方式三：MCP 工具（接入外部服务）
+
+```python
+from ollamapilot import create_agent, create_mcp_middleware
+
+mcp_mw = create_mcp_middleware(
+    server_url="https://mcp.example.com/mcp",
+    server_name="my-server",
+    allowed_tools=["search", "query"]
+)
+
+agent = create_agent(model, middleware=[mcp_mw])
+```
 
 ---
 
-## 🏛️ 技术栈
+## 🏗️ 架构
 
-| 技术 | 版本 | 用途 |
+### 核心设计
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    OllamaPilot Agent                        │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
+│  │   Skill 1    │    │   Skill 2    │    │   Skill N    │  │
+│  │  (天气查询)   │    │  (代码执行)   │    │  (文件操作)   │  │
+│  └──────┬───────┘    └──────┬───────┘    └──────┬───────┘  │
+│         │                   │                   │          │
+│         └───────────────────┼───────────────────┘          │
+│                             ▼                              │
+│                    ┌─────────────────┐                     │
+│  ┌──────────────┐  │  Skill Selector │  ┌──────────────┐  │
+│  │  Tool Retry  │← │   Middleware    │ →│  Tool Limit  │  │
+│  └──────────────┘  └────────┬────────┘  └──────────────┘  │
+│                             ▼                              │
+│                    ┌─────────────────┐                     │
+│                    │  LangChain      │                     │
+│                    │  create_agent   │                     │
+│                    └─────────────────┘                     │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 技术栈
+
+- **LangChain 1.0+**：`create_agent()` + `AgentMiddleware`
+- **LangGraph**：`MemorySaver` 实现对话记忆
+- **Ollama**：本地模型支持（qwen3.5:4b/9b/35b, glm-4.7-flash 等）
+
+---
+
+## 🛠️ 内置工具
+
+| 工具 | 功能 | 示例 |
 |------|------|------|
-| Python | >=3.9 | 编程语言 |
-| LangChain | >=1.0.0 | LLM 应用框架 |
-| LangChain-Core | >=1.0.0 | 核心组件 |
-| Pydantic | >=2.7.0 | 数据验证 |
-| tiktoken | >=0.5.0 | Token 精确计算 |
-| langchain-ollama | >=1.0.0 | Ollama 本地模型支持 |
+| `web_search` | 网络搜索 | `web_search.invoke({"query": "天气"})` |
+| `web_fetch` | 获取网页内容 | `web_fetch.invoke({"url": "https://..."})` |
+| `python_exec` | 执行 Python 代码 | `python_exec.invoke({"code": "1+1"})` |
+| `read_file` | 读取文件 | `read_file.invoke({"path": "file.txt"})` |
+| `write_file` | 写入文件 | `write_file.invoke({"path": "file.txt", "content": "..."})` |
+| `list_directory` | 列出目录 | `list_directory.invoke({"path": "."})` |
+| `search_files` | 搜索文件 | `search_files.invoke({"pattern": "*.py"})` |
+| `shell_exec` | 执行 Shell 命令 | `shell_exec.invoke({"command": "ls"})` |
+| `shell_script` | 执行 Shell 脚本 | `shell_script.invoke({"script": "echo hello"})` |
 
 ---
 
-## 📂 项目结构
+## ✅ 测试
+
+### 运行测试
+
+```bash
+python tests/test_agent.py
+```
+
+### 测试结果
+
+```
+============================================================
+OllamaPilot 测试套件
+============================================================
+
+✅ 发现模型: qwen3.5:4b
+======================== test session starts ========================
+platform win32 -- Python 3.11.5, pytest-8.4.2
+collected 8 items
+
+tests/test_agent.py::TestBasicFunctionality::test_list_models PASSED
+tests/test_agent.py::TestBasicFunctionality::test_init_model PASSED
+tests/test_agent.py::TestAgent::test_agent_creation PASSED
+tests/test_agent.py::TestAgent::test_simple_chat PASSED
+tests/test_agent.py::TestAgent::test_python_tool PASSED
+tests/test_agent.py::TestAgent::test_file_tool PASSED
+tests/test_agent.py::TestQuestions::test_question_1_weekday PASSED
+tests/test_agent.py::TestQuestions::test_question_2_weather PASSED
+
+============= 8 passed in 52.31s =============
+```
+
+### 测试覆盖
+
+- ✅ 模型列表和初始化
+- ✅ Agent 创建和配置
+- ✅ 简单对话
+- ✅ Python 工具执行
+- ✅ 文件工具执行
+- ✅ **测试题目 1**：明天星期几 ✓
+- ✅ **测试题目 2**：明天苏州天气怎么样 ✓
+- ✅ **记忆功能**：多轮对话记忆测试 ✓
+
+---
+
+## 🎯 实战演示
+
+### 示例 1：天气查询
+
+```
+用户: 明天苏州天气怎么样
+🎯 激活 Skill: weather
+🔧 执行工具: web_search({'query': '苏州明天天气'})
+   ✅ 结果: 🔍 搜索 '苏州明天天气' 的结果（5 条）:
+           1. 苏州天气预报-中央气象台
+              URL: https://www.nmc.cn/publish/forecast/AJS/suzhou.html
+🔧 执行工具: web_fetch({'url': 'https://www.nmc.cn/publish/forecast/AJS/suzhou.html'})
+   ✅ 结果: 📄 标题: 苏州天气预报
+           🔗 URL: https://www.nmc.cn/publish/forecast/AJS/suzhou.html
+
+AI: 根据查询结果，苏州明天的天气情况如下：
+
+## 🌤️ 苏州明天天气预报
+
+| 项目 | 详情 |
+|------|------|
+| **天气状况** | ☀️晴 |
+| **温度范围** | 6 ~ 14℃ |
+| **空气质量** | ✅优 |
+```
+
+### 示例 2：Python 计算
+
+```
+用户: 计算 1+2+3+4+5 等于多少
+🔧 执行工具: python_exec({'code': 'sum([1,2,3,4,5])'})
+   ✅ 结果: >>> Python 代码执行
+           ==================================================
+           代码:
+           result = sum([1,2,3,4,5])
+           print(result)
+           ==================================================
+
+           📤 输出:
+           15
+
+           ✅ 执行成功
+
+AI: 1 + 2 + 3 + 4 + 5 = **15**
+```
+
+### 示例 3：记忆功能
+
+```python
+# 第一轮
+agent.invoke("我叫张三", thread_id="session_1")
+# AI: 你好张三！很高兴认识你。
+
+# 第二轮（同一个 session）
+agent.invoke("你还记得我叫什么名字吗？", thread_id="session_1")
+# AI: 当然记得，你叫张三！
+```
+
+### 示例 4：文件操作
+
+```
+用户: 列出当前目录的文件
+🔧 执行工具: list_directory({'path': '.'})
+   ✅ 结果: 📁 目录: D:\xx\OllamaPilot
+           ==================================================
+           📂 .git/
+           📂 ollamapilot/
+           📂 skills/
+           📂 tests/
+           📄 README.md
+           📄 main.py
+           📄 pyproject.toml
+
+AI: 当前目录下有以下内容和文件：
+
+**📁 子目录：**
+1. `.git/` - Git版本控制信息
+2. `ollamapilot/` - OllamaPilot主包目录
+3. `skills/` - 技能相关文件夹
+4. `tests/` - 测试文件目录
+
+**📄 文本文件：**
+1. `README.md` (11.4KB) - 项目说明文档
+2. `main.py` (3.7KB) - 主程序入口脚本
+3. `pyproject.toml` (1.6KB) - Python项目配置文件
+```
+
+---
+
+## 📁 项目结构
 
 ```
 OllamaPilot/
-├── base_agent/              # 核心引擎
-│   ├── agent.py           # Agent 实现
-│   ├── skill/             # Skill 路由与加载
-│   ├── middleware/        # 中间件链
-│   ├── model/            # 模型客户端
-│   └── tool/             # 工具加载器
-│
-├── skills/                # Skill 目录
-│   └── web/              # 网络搜索 (Docker)
-│       ├── SKILL.md
-│       ├── skill.py
-│       ├── docker-compose.yml
-│       └── setup-searxng.ps1
-│
-├── tools/                 # 内置工具
-│   ├── builtin/          # 9 大内置工具
-│   │   ├── filesystem.py  # 文件系统
-│   │   ├── shell.py       # Shell 命令
-│   │   └── code.py        # 代码处理
-│   └── registry.py        # 工具注册表
-│
-├── examples/              # 示例代码
-├── tests/                # 测试用例
-├── main.py               # 主入口
-├── pyproject.toml        # 项目配置
-└── README.md             # 本文档
+├── ollamapilot/              # 核心包
+│   ├── __init__.py
+│   ├── agent.py              # Agent 实现（基于 create_agent）
+│   ├── skill_middleware.py   # Skill 中间件
+│   ├── models.py             # 模型初始化
+│   └── tools/
+│       ├── __init__.py
+│       ├── builtin.py        # 9个内置工具
+│       ├── mcp_tools.py      # MCP 工具支持
+│       └── custom/           # 自定义工具目录
+│           └── __init__.py
+├── skills/                   # Skill 目录（用户自定义）
+│   └── weather/
+│       └── SKILL.md
+├── tests/
+│   └── test_agent.py         # 测试套件
+├── .gitignore
+├── LICENSE
+├── main.py                   # CLI 入口
+├── pyproject.toml            # 项目配置
+└── README.md                 # 本文档
 ```
 
 ---
 
-## 🎯 核心特性详解
+## 🔧 高级配置
 
-### 1. 模型驱动的 Skill 路由
-
-让模型根据 Skill 描述和触发词智能选择最合适的 Skill：
+### 记忆功能
 
 ```python
-# 模型自动决策过程
-用户输入: "帮我搜索最新的 AI 新闻"
-  ↓
-模型分析: 包含"搜索"关键词 → 匹配 web Skill
-  ↓
-自动加载: web Skill + web_search 工具
-  ↓
-执行任务: 调用搜索工具
+# 启用记忆
+agent = create_agent(model, enable_memory=True)
+
+# 多轮对话
+response1 = agent.invoke("我叫张三", thread_id="session_1")
+response2 = agent.invoke("我叫什么名字？", thread_id="session_1")  # 记得！
+
+# 清除记忆
+agent.clear_history("session_1")
 ```
 
-### 2. 中间件链保障
-
-5 大中间件确保小模型稳定运行：
-
-| 中间件 | 作用 |
-|--------|------|
-| Skill Loader | 自动加载匹配的工具和上下文 |
-| Context Inject | 动态注入 Skill 描述和工具说明 |
-| Tool Retry | 工具调用失败自动重试 |
-| Memory Manager | 维护对话上下文，支持多轮交互 |
-| Tool Format Parser | 多格式解析，兼容小模型不规范输出 |
-
-### 3. Token 精确计算
-
-使用 tiktoken 精确计算，防止上下文溢出：
+### 详细日志
 
 ```python
-# 智能加载策略
-if estimated_tokens < 4000:
-    strategy = "full"      # 完全加载
-elif estimated_tokens < 8000:
-    strategy = "layered"   # 分层加载
-else:
-    strategy = "retrieval" # 检索加载
+agent = create_agent(model, verbose=True)
+# 输出：
+# 📦 已加载 1 个 Skill
+# 🎯 激活 Skill: weather
+# 🔧 执行工具: web_search({'query': '苏州天气'})
+#    ✅ 结果: ...
+```
+
+### 自定义中间件
+
+```python
+from langchain.agents.middleware import ToolRetryMiddleware
+
+agent = create_agent(
+    model=model,
+    middleware=[
+        ToolRetryMiddleware(max_retries=3),  # 工具重试
+    ]
+)
 ```
 
 ---
 
-## 📖 使用示例
+## 📊 性能优化
 
-### 示例 1：文件操作
+针对小模型的工程优化：
 
-```bash
-你: 列出当前目录的所有文件
-🤖: [调用 list_directory 工具]
-✅ 已找到以下文件：main.py, README.md, ...
-
-你: 读取 README.md 的前 50 行
-🤖: [调用 read_file 工具]
-✅ 已读取文件内容...
-```
-
-### 示例 2：代码搜索
-
-```bash
-你: 搜索项目中所有的 Agent 类
-🤖: [调用 code_search 工具]
-✅ 找到 3 个匹配结果：
-   1. base_agent/agent.py - Agent 类定义
-   2. examples/model_driven_demo.py - 使用示例
-   ...
-```
-
-### 示例 3：网络搜索
-
-```bash
-你: 搜索最新的 Python 3.12 新特性
-🤖: [自动选择 web Skill]
-🤖: [调用 web_search 工具]
-✅ 搜索结果：
-   Python 3.12 新特性包括：
-   1. 更好的错误消息
-   2. 性能优化
-   3. 新的语法特性
-   ...
-```
+- **工具重试**：`ToolRetryMiddleware` 自动重试失败工具
+- **调用限制**：`ToolCallLimitMiddleware` 防止无限循环
+- **详细日志**：verbose 模式显示执行过程，便于调试
+- **Skill 选择**：自动选择最合适的 Skill，减少模型困惑
 
 ---
 
-## 🤝 贡献指南
+## 📜 版本历史
 
-欢迎贡献！请遵循以下步骤：
+### v1.0.0 (当前)
 
-1. Fork 本仓库
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 开启 Pull Request
+- ✅ 基于 LangChain 1.0+ `create_agent`
+- ✅ Skill 系统（SKILL.md + Python）
+- ✅ 内置 9 个工具
+- ✅ MCP 工具支持
+- ✅ 自定义工具支持
+- ✅ 记忆功能
+- ✅ 中间件系统
+- ✅ 8 项测试全部通过
 
 ---
+
+## 🤝 贡献
+
+欢迎提交 Issue 和 PR！
 
 ## 📄 许可证
 
-本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件
+MIT License
 
 ---
 
-## 🙏 致谢
-
-- [LangChain](https://python.langchain.com/) - 强大的 LLM 应用框架
-- [Ollama](https://ollama.com/) - 本地模型运行平台
-- [SearXNG](https://docs.searxng.org/) - 开源搜索引擎
-
----
-
-## 📮 联系方式
-
-- **GitHub Issues**: [提交问题](https://github.com/yourusername/OllamaPilot/issues)
-- **Discussions**: [参与讨论](https://github.com/yourusername/OllamaPilot/discussions)
-
----
-
-<div align="center">
-
-**如果这个项目对你有帮助，请给个 ⭐ Star！**
-
-Made with ❤️ by OllamaPilot Team
-
-</div>
-
----
-
-## English
-
-# OllamaPilot 🚀
-
-<div align="center">
-
-**A Local Agent Framework That Makes 4B Models Capable of Complex Tasks**
-
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![LangChain](https://img.shields.io/badge/LangChain-1.0+-green.svg)](https://python.langchain.com/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Ollama](https://img.shields.io/badge/Ollama-Supported-red.svg)](https://ollama.com/)
-
-</div>
-
----
-
-## ✨ Why OllamaPilot?
-
-### 🎯 Three Core Advantages
-
-#### 1️⃣ **Fully Local - Zero Cloud Dependency**
-- 🔒 **Data Privacy**: All models run locally, data never leaves your machine
-- 💰 **Zero Cost**: No API fees, download once and use forever
-- 🚀 **4B Model Ready**: Optimized for small models to do big tasks
-
-#### 2️⃣ **Ready to Use - 9 Built-in Tools**
-```
-📁 File System  |  🔧 Shell Commands  |  💻 Code Processing
-   read_file         shell_exec          code_search
-   write_file        shell_script        apply_patch
-   list_directory                         code_stats
-   search_files
-```
-**No configuration needed, just install and use!**
-
-#### 3️⃣ **Web Skill - One-Click Docker Deployment**
-```bash
-cd skills/web
-docker-compose up -d
-```
-- ✅ **Fully Local Search**: Uses SearXNG, no API Key required
-- ✅ **One-Click Setup**: One command to deploy search engine
-- ✅ **Privacy Protected**: Search data processed entirely locally
-
----
-
-## 🚀 Quick Start
-
-### 1. Install Ollama
-
-```bash
-# Visit https://ollama.com to download and install
-# Supports Windows / macOS / Linux
-```
-
-### 2. Download Models
-
-```bash
-# 4B model - Lightweight, suitable for average computers
-ollama pull qwen3.5:4b
-
-# Or 9B model - Better performance
-ollama pull qwen3.5:9b
-
-# Or GLM model
-ollama pull glm-4.7-flash:latest
-```
-
-### 3. Clone and Install
-
-```bash
-git clone https://github.com/yourusername/OllamaPilot.git
-cd OllamaPilot
-
-pip install -e ".[ollama]"
-```
-
-### 4. Run
-
-```bash
-python main.py
-```
-
-That's it! 🎉
-
----
-
-## 📦 Built-in Tools
-
-OllamaPilot comes with 9 built-in tools:
-
-### 📁 File System Tools
-
-| Tool | Function | Example |
-|------|----------|---------|
-| `read_file` | Read file content | Read config files, logs |
-| `write_file` | Write file content | Save results, generate code |
-| `list_directory` | List directory contents | Browse project structure |
-| `search_files` | Search files | Find specific files |
-
-### 🔧 Shell Command Tools
-
-| Tool | Function | Example |
-|------|----------|---------|
-| `shell_exec` | Execute shell commands | Run tests, deploy scripts |
-| `shell_script` | Execute shell scripts | Batch processing |
-
-### 💻 Code Processing Tools
-
-| Tool | Function | Example |
-|------|----------|---------|
-| `code_search` | Search code | Find functions, class definitions |
-| `apply_patch` | Apply code patches | Fix bugs, add features |
-| `code_stats` | Code statistics | Analyze code size, complexity |
-
----
-
-## 🔧 Web Skill - Docker Deployment
-
-### Deployment Steps
-
-```bash
-# 1. Enter web skill directory
-cd skills/web
-
-# 2. One-click start search engine (Docker)
-docker-compose up -d
-
-# 3. First-time setup (optional)
-./setup-searxng.ps1  # Windows
-# or
-./setup-searxng.sh     # Linux/macOS
-```
-
-### Features
-
-- ✅ **Zero API Dependency**: Uses open-source SearXNG search engine
-- ✅ **Fully Local**: Search data doesn't go through third-party servers
-- ✅ **One-Click Deployment**: Docker Compose automated setup
-- ✅ **Multi-Engine Aggregation**: Supports Google, Bing, DuckDuckGo, etc.
-
----
-
-## 🧩 Skill Extension System
-
-### Create Custom Skill in 3 Steps
-
-#### 1. Create Directory
-
-```bash
-mkdir skills/my_skill
-cd skills/my_skill
-```
-
-#### 2. Write SKILL.md
-
-```markdown
----
-name: my_skill
-description: My custom skill
-tags: ["custom", "example"]
-triggers:
-  - "test"
-  - "demo"
-version: "1.0.0"
-author: "Your Name"
-tools:
-  - name: my_tool
-    type: local
-    module: skills.my_skill.skill
----
-
-# My Skill
-
-## Description
-This is an example skill...
-```
-
-#### 3. Implement Tools (Optional)
-
-```python
-# skills/my_skill/skill.py
-from langchain_core.tools import tool
-
-@tool
-def my_tool(query: str) -> str:
-    """My tool description"""
-    return f"Result: {query}"
-
-TOOLS = [my_tool]
-```
-
-That's it! The system will automatically discover and load your Skill.
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details
-
----
-
-<div align="center">
-
-**If this project helps you, please give it a ⭐ Star!**
-
-Made with ❤️ by OllamaPilot Team
-
-</div>
+<p align="center">
+  Made with ❤️ for Local AI
+</p>
