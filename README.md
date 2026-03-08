@@ -410,7 +410,12 @@ agent = create_agent(
 
 ## 📜 版本历史
 
-### v1.0.0 (当前)
+### v0.1.1 (当前)
+
+- ✅ 修复 Skill 激活日志显示问题
+- ✅ 优化工具调用日志显示
+
+### v0.1.0
 
 - ✅ 基于 LangChain 1.0+ `create_agent`
 - ✅ Skill 系统（SKILL.md + Python）

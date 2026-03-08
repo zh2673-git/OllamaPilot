@@ -167,6 +167,11 @@ class OllamaPilotAgent:
         if self.verbose:
             print(f"🤖 用户: {query}")
 
+        # 手动选择 Skill 并显示日志（确保在 invoke 前显示）
+        skill = self._select_skill_for_query(query)
+        if skill and self.verbose:
+            print(f"🎯 激活 Skill: {skill.name}")
+
         # 配置
         config = {"configurable": {"thread_id": thread_id or "default"}}
 
@@ -187,6 +192,29 @@ class OllamaPilotAgent:
                 return response
 
         return ""
+
+    def _select_skill_for_query(self, query: str) -> Optional[Any]:
+        """
+        根据查询选择合适的 Skill
+
+        Args:
+            query: 用户查询
+
+        Returns:
+            Skill 实例或 None
+        """
+        # 1. 查找匹配的特定 Skill
+        matches = self.skill_registry.find_skill_by_trigger(query)
+
+        if matches:
+            return self.skill_registry.get_skill(matches[0])
+
+        # 2. 返回默认 Skill
+        default_skill = self.skill_registry.get_default_skill()
+        if default_skill:
+            return default_skill
+
+        return None
 
     def stream(self, query: str, thread_id: Optional[str] = None):
         """

@@ -162,8 +162,9 @@ class SkillSelectorMiddleware(AgentMiddleware):
         skill = self._select_skill(query)
 
         if skill:
-            if self.verbose:
-                print(f"🎯 激活 Skill: {skill.name}")
+            # 注：Skill 激活日志现在在 agent.invoke() 中打印，避免重复
+            # if self.verbose:
+            #     print(f"🎯 激活 Skill: {skill.name}")
 
             system_prompt = skill.get_system_prompt()
             if system_prompt:
