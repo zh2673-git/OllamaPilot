@@ -1,0 +1,501 @@
+"""
+GraphRAG 工具集
+
+提供知识图谱相关的工具函数。
+"""
+
+from typing import Optional, List, Dict, Any
+from langchain_core.tools import tool
+from pathlib import Path
+
+from skills.graphrag.services import (
+    GraphRAGService,
+    OntologyGenerator,
+    LightweightEntityExtractor,
+    Entity
+)
+from skills.graphrag.utils import DocumentProcessor
+
+
+# 全局服务实例（由 Agent 初始化时注入）
+_graph_service: Optional[GraphRAGService] = None
+_ontology_generator: Optional[OntologyGenerator] = None
+_entity_extractor: Optional[LightweightEntityExtractor] = None
+_knowledge_base_dir: str = "./knowledge_base"
+
+
+def init_graphrag_services(
+    service: GraphRAGService,
+    ont_gen: Optional[OntologyGenerator] = None,
+    ext: Optional[LightweightEntityExtractor] = None,
+    kb_dir: str = "./knowledge_base"
+):
+    """初始化服务"""
+    global _graph_service, _ontology_generator, _entity_extractor, _knowledge_base_dir
+    _graph_service = service
+    _ontology_generator = ont_gen
+    _entity_extractor = ext or LightweightEntityExtractor()
+    _knowledge_base_dir = kb_dir
+
+
+def get_graph_service() -> Optional[GraphRAGService]:
+    """获取图谱服务实例"""
+    return _graph_service
+
+
+@tool
+def upload_document(
+    file_path: str,
+    save_to_knowledge_base: bool = True
+) -> str:
+    """
+    上传文档到知识库并建立索引
+
+    文档会被自动保存到知识库目录，然后分块、抽取实体、建立索引。
+    支持 PDF、TXT、MD、DOCX 等格式。
+
+    Args:
+        file_path: 文档路径（可以是任意位置的文件）
+        save_to_knowledge_base: 是否保存到知识库目录，默认 True
+
+    Returns:
+        处理结果
+    """
+    if not _graph_service or not _entity_extractor:
+        return "❌ 服务未初始化"
+
+    try:
+        source_path = Path(file_path)
+        if not source_path.exists():
+            return f"❌ 文件不存在: {file_path}"
+
+        # 检查文件类型
+        supported_ext = {'.txt', '.md', '.pdf', '.docx', '.doc'}
+        if source_path.suffix.lower() not in supported_ext:
+            return f"❌ 不支持的文件类型: {source_path.suffix}，支持的类型: {', '.join(supported_ext)}"
+
+        # 保存到知识库目录
+        if save_to_knowledge_base:
+            kb_path = Path(_knowledge_base_dir)
+            kb_path.mkdir(parents=True, exist_ok=True)
+
+            # 目标路径
+            dest_path = kb_path / source_path.name
+
+            # 如果文件已存在，添加数字后缀
+            counter = 1
+            original_dest = dest_path
+            while dest_path.exists():
+                stem = original_dest.stem
+                suffix = original_dest.suffix
+                dest_path = kb_path / f"{stem}_{counter}{suffix}"
+                counter += 1
+
+            # 复制文件
+            import shutil
+            shutil.copy2(source_path, dest_path)
+            print(f"📁 已保存到知识库: {dest_path}")
+
+            # 使用新路径继续处理
+            file_path = str(dest_path)
+
+        # 读取文档
+        print(f"📖 正在读取文档: {Path(file_path).name}")
+        processor = DocumentProcessor()
+        text = processor.read_document(file_path)
+
+        if not text:
+            return f"❌ 无法读取文档内容: {file_path}"
+
+        print(f"✅ 文档读取完成，长度: {len(text)} 字符")
+
+        # 分块
+        print("🔄 正在分块...")
+        chunks = processor.chunk_text(text)
+        print(f"✅ 分块完成，共 {len(chunks)} 块")
+
+        # 处理每个块
+        print(f"🔄 正在处理 {len(chunks)} 个块...")
+        total_entities = 0
+        for i, chunk in enumerate(chunks):
+            try:
+                # 抽取实体
+                entities = _entity_extractor.extract(chunk)
+
+                # 转换为 Entity 对象
+                entity_objects = [
+                    Entity(name=e.name, type=e.type, positions=[(e.start, e.end)])
+                    for e in entities
+                ]
+
+                # 添加到图谱
+                doc_id = f"kb_{hash(file_path) % 10000}_{i}"
+                _graph_service.add_document(
+                    text=chunk,
+                    doc_id=doc_id,
+                    metadata={
+                        "source": file_path,
+                        "chunk_index": i,
+                        "total_chunks": len(chunks),
+                        "filename": Path(file_path).name
+                    },
+                    entities=entity_objects
+                )
+
+                total_entities += len(entities)
+
+                if (i + 1) % 10 == 0:
+                    print(f"  已处理 {i + 1}/{len(chunks)} 块...")
+
+            except Exception as e:
+                print(f"  ⚠️ 处理第 {i+1} 块时出错: {e}")
+                continue
+
+        print(f"✅ 所有块处理完成")
+
+        stats = _graph_service.get_stats()
+        dest_info = f"📁 已保存到知识库: {Path(file_path).name}\n" if save_to_knowledge_base else ""
+        return f"""✅ 文档上传完成！
+{dest_info}- 文件：{Path(file_path).name}
+- 分块数：{len(chunks)}
+- 新抽取实体：{total_entities}
+- 图谱总实体数：{stats['total_entities']}
+- 图谱总关系数：{stats['total_relations']}
+
+现在可以直接询问与该文档相关的问题了。"""
+
+    except Exception as e:
+        return f"❌ 上传失败：{str(e)}"
+
+
+@tool
+def add_document(
+    file_path: str,
+    collection_name: Optional[str] = "default"
+) -> str:
+    """
+    添加文档到知识图谱（不复制到知识库目录）
+
+    文档会被自动分块、抽取实体、建立索引，但不会保存到知识库目录。
+    适用于临时添加文档或文档已在知识库目录中的情况。
+
+    Args:
+        file_path: 文档路径
+        collection_name: 集合名称
+
+    Returns:
+        处理结果
+    """
+    # 直接调用 upload_document，但不保存到知识库
+    return upload_document(file_path, save_to_knowledge_base=False)
+
+
+@tool
+def add_text(
+    text: str,
+    source: str = "manual_input",
+    collection_name: Optional[str] = "default"
+) -> str:
+    """
+    添加文本到知识图谱
+
+    Args:
+        text: 文本内容
+        source: 来源标识
+        collection_name: 集合名称
+
+    Returns:
+        处理结果
+    """
+    if not _graph_service or not _entity_extractor:
+        return "❌ 服务未初始化"
+
+    try:
+        # 分块
+        processor = DocumentProcessor()
+        chunks = processor.chunk_text(text)
+
+        # 处理每个块
+        total_entities = 0
+        for i, chunk in enumerate(chunks):
+            # 抽取实体
+            entities = _entity_extractor.extract(chunk)
+
+            # 转换为 Entity 对象
+            entity_objects = [
+                Entity(name=e.name, type=e.type, positions=[(e.start, e.end)])
+                for e in entities
+            ]
+
+            # 添加到图谱
+            doc_id = f"{collection_name}_{source}_{i}"
+            _graph_service.add_document(
+                text=chunk,
+                doc_id=doc_id,
+                metadata={
+                    "source": source,
+                    "chunk_index": i,
+                    "collection": collection_name
+                },
+                entities=entity_objects
+            )
+
+            total_entities += len(entities)
+
+        stats = _graph_service.get_stats()
+        return f"""✅ 文本处理完成！
+- 来源：{source}
+- 分块数：{len(chunks)}
+- 新抽取实体：{total_entities}
+- 图谱总实体数：{stats['total_entities']}
+- 图谱总关系数：{stats['total_relations']}"""
+
+    except Exception as e:
+        return f"❌ 处理失败：{str(e)}"
+
+
+@tool
+def generate_ontology(document_text: str) -> str:
+    """
+    从文档生成本体定义
+
+    Args:
+        document_text: 文档文本（前10000字符）
+
+    Returns:
+        本体定义 JSON
+    """
+    if not _ontology_generator:
+        return "❌ 本体生成器未初始化"
+
+    try:
+        ontology = _ontology_generator.generate([document_text])
+
+        # 设置到服务
+        _graph_service.set_ontology(ontology)
+
+        entity_types = "\n".join([f"- {e['name']}: {e['description']}" for e in ontology['entity_types']])
+        relation_types = "\n".join([f"- {r['name']}: {r['description']}" for r in ontology['relation_types']])
+
+        return f"""✅ 本体定义生成完成！
+
+实体类型（{len(ontology['entity_types'])}个）：
+{entity_types}
+
+关系类型（{len(ontology['relation_types'])}个）：
+{relation_types}
+
+摘要：{ontology.get('analysis_summary', '无')}"""
+
+    except Exception as e:
+        return f"❌ 生成失败：{str(e)}"
+
+
+@tool
+def query_graph_stats() -> str:
+    """
+    查询知识图谱统计信息
+
+    Returns:
+        统计信息
+    """
+    if not _graph_service:
+        return "❌ 服务未初始化"
+
+    stats = _graph_service.get_stats()
+    entity_types = ', '.join(stats['entity_types']) if stats['entity_types'] else '无'
+
+    return f"""📊 知识图谱统计：
+- 文档数：{stats['total_documents']}
+- 实体数：{stats['total_entities']}
+- 关系数：{stats['total_relations']}
+- 实体类型：{entity_types}"""
+
+
+@tool
+def search_knowledge(
+    query: str,
+    n_results: int = 5
+) -> str:
+    """
+    搜索知识图谱
+
+    Args:
+        query: 查询文本
+        n_results: 返回结果数量
+
+    Returns:
+        搜索结果
+    """
+    if not _graph_service or not _entity_extractor:
+        return "❌ 服务未初始化"
+
+    try:
+        # 提取查询实体
+        query_entities = _entity_extractor.extract_from_query(query)
+
+        if query_entities:
+            # 实体增强检索
+            results = _graph_service.enhanced_search(
+                query=query,
+                query_entities=query_entities,
+                n_results=n_results
+            )
+
+            entity_info = f"提取到实体: {', '.join([e['name'] for e in query_entities])}"
+        else:
+            # 纯向量检索
+            results = {
+                "documents": _graph_service.vector_search(query, n_results=n_results),
+                "query_entities": [],
+                "relations": [],
+                "related_entities": []
+            }
+            entity_info = "未提取到实体，使用向量检索"
+
+        if not results["documents"]:
+            return f"🔍 未找到相关文档\n{entity_info}"
+
+        # 格式化结果
+        output = [f"🔍 搜索结果 ({len(results['documents'])} 条)",
+                  f"{entity_info}",
+                  "=" * 50]
+
+        # 显示关系
+        if results.get("relations"):
+            output.append("\n【相关关系】")
+            for rel in results["relations"][:3]:
+                output.append(f"- {rel['source']} --{rel['relation']}--> {rel['target']}")
+
+        # 显示文档
+        output.append("\n【相关文档】")
+        for i, doc in enumerate(results["documents"], 1):
+            metadata = doc.get("metadata", {})
+            source = metadata.get("source", "未知")
+            score = doc.get("score", 0)
+            content = doc.get("content", "")[:300]
+
+            output.append(f"\n[{i}] 来源: {source} | 相关度: {score:.2f}")
+            output.append(f"    {content}...")
+
+        return "\n".join(output)
+
+    except Exception as e:
+        return f"❌ 搜索失败：{str(e)}"
+
+
+@tool
+def list_entities(entity_type: Optional[str] = None) -> str:
+    """
+    列出知识图谱中的实体
+
+    Args:
+        entity_type: 实体类型过滤（可选）
+
+    Returns:
+        实体列表
+    """
+    if not _graph_service:
+        return "❌ 服务未初始化"
+
+    try:
+        entities = _graph_service.entity_index
+
+        if not entities:
+            return "📭 知识图谱中暂无实体"
+
+        # 过滤实体类型
+        filtered_entities = {}
+        for name, info in entities.items():
+            if entity_type is None or info["type"] == entity_type:
+                filtered_entities[name] = info
+
+        if not filtered_entities:
+            return f"📭 未找到类型为 '{entity_type}' 的实体"
+
+        # 按类型分组
+        by_type: Dict[str, List[str]] = {}
+        for name, info in filtered_entities.items():
+            etype = info["type"]
+            if etype not in by_type:
+                by_type[etype] = []
+            by_type[etype].append(name)
+
+        # 格式化输出
+        output = [f"📋 实体列表 (共 {len(filtered_entities)} 个)", "=" * 50]
+
+        for etype, names in sorted(by_type.items()):
+            output.append(f"\n【{etype}】({len(names)}个)")
+            for name in sorted(names)[:20]:  # 每类最多显示20个
+                doc_count = len(entities[name]["doc_ids"])
+                output.append(f"  - {name} (出现在 {doc_count} 个文档)")
+
+            if len(names) > 20:
+                output.append(f"  ... 还有 {len(names) - 20} 个")
+
+        return "\n".join(output)
+
+    except Exception as e:
+        return f"❌ 查询失败：{str(e)}"
+
+
+@tool
+def get_entity_relations(entity_name: str) -> str:
+    """
+    获取实体的关系
+
+    Args:
+        entity_name: 实体名称
+
+    Returns:
+        关系信息
+    """
+    if not _graph_service:
+        return "❌ 服务未初始化"
+
+    try:
+        # 获取实体信息
+        if entity_name not in _graph_service.entity_index:
+            return f"❌ 未找到实体: {entity_name}"
+
+        entity_info = _graph_service.entity_index[entity_name]
+        doc_ids = entity_info["doc_ids"]
+
+        # 获取关系
+        relations = _graph_service.get_relations(entity_name)
+
+        # 格式化输出
+        output = [
+            f"🔍 实体: {entity_name}",
+            f"类型: {entity_info['type']}",
+            f"出现在 {len(doc_ids)} 个文档中",
+            "=" * 50
+        ]
+
+        if relations:
+            output.append(f"\n【关系】({len(relations)}个)")
+            for rel in relations:
+                output.append(
+                    f"- {rel['source']} --{rel['relation']}--> {rel['target']} "
+                    f"(置信度: {rel['confidence']:.2f})"
+                )
+        else:
+            output.append("\n【关系】暂无")
+
+        return "\n".join(output)
+
+    except Exception as e:
+        return f"❌ 查询失败：{str(e)}"
+
+
+# 工具列表
+graphrag_tools = [
+    upload_document,  # 新增：上传文档到知识库
+    add_document,
+    add_text,
+    generate_ontology,
+    query_graph_stats,
+    search_knowledge,
+    list_entities,
+    get_entity_relations,
+]

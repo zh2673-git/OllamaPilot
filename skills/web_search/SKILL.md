@@ -1,3 +1,21 @@
+---
+name: web_search
+description: 提供网络搜索能力，支持自动部署和管理 SearXNG 搜索引擎
+triggers:
+  - 搜索
+  - 查询
+  - 网上
+  - 网络
+  - google
+  - 百度
+  - 查找
+  - 资料
+tools:
+  - web_search
+  - web_search_setup
+  - web_fetch
+---
+
 # Web 搜索 Skill
 
 ## 基本信息
@@ -6,17 +24,6 @@
 - **description**: 提供网络搜索能力，支持自动部署和管理 SearXNG 搜索引擎
 - **version**: 1.0.0
 - **author**: OllamaPilot
-
-## 触发词
-
-- 搜索
-- 查询
-- 网上
-- 网络
-- google
-- 百度
-- 查找
-- 资料
 
 ## 系统提示词
 
@@ -40,12 +47,6 @@
 - 搜索工具依赖本地部署的 SearXNG 服务
 - 首次使用时会自动尝试启动 Docker 容器
 - 支持通过环境变量 `SEARXNG_URL` 使用远程 SearXNG 实例
-
-## 依赖工具
-
-- web_search
-- web_search_setup
-- web_fetch
 
 ## 配置
 

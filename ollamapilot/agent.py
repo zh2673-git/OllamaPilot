@@ -40,6 +40,7 @@ class OllamaPilotAgent:
     - 自动工具重试和限流
     - 对话记忆持久化
     - 详细执行日志
+    - Skill 可注册自定义中间件（如 GraphRAG）
 
     示例:
         >>> from ollamapilot import init_ollama_model, OllamaPilotAgent
@@ -58,7 +59,8 @@ class OllamaPilotAgent:
         verbose: bool = True,
         checkpointer=None,
         tools: Optional[List[BaseTool]] = None,  # 兼容参数，实际使用内置工具
-        **kwargs,  # 忽略其他参数
+        embedding_model: Optional[str] = None,  # Embedding 模型名称
+        **kwargs,  # 忽略其他参数，保持向后兼容
     ):
         """
         初始化 Agent
@@ -70,20 +72,25 @@ class OllamaPilotAgent:
             max_tool_calls: 最大工具调用次数
             verbose: 是否显示详细执行过程
             checkpointer: 自定义 checkpointer
+            embedding_model: Embedding 模型名称（传递给 GraphRAG Skill）
         """
         self.model = model
         self.verbose = verbose
 
+        # 构建 Skill 配置
+        skill_config = {}
+        if embedding_model:
+            skill_config["graphrag"] = {"embedding_model": embedding_model}
+
         # 初始化 Skill 注册中心
-        self.skill_registry = SkillRegistry()
+        self.skill_registry = SkillRegistry(skill_config=skill_config)
         if skills_dir:
             count = self.skill_registry.discover_skills(skills_dir)
             if self.verbose:
                 print(f"📦 已加载 {count} 个 Skill")
 
-        # 收集所有内置工具
-        self.builtin_tools = self._get_builtin_tools()
-        self.all_tools = self.builtin_tools  # 兼容旧版本属性名
+        # 收集所有工具（内置 + Skill）
+        self.all_tools = self._get_all_tools()
 
         # 配置 Checkpointer
         if checkpointer:
@@ -98,15 +105,16 @@ class OllamaPilotAgent:
 
         # 创建 Agent（使用 LangChain 原生 create_agent）
         self.agent = lc_create_agent(
-            model=model.bind_tools(self.builtin_tools),
-            tools=self.builtin_tools,
+            model=model.bind_tools(self.all_tools),
+            tools=self.all_tools,
             middleware=middleware,
             checkpointer=self.checkpointer,
         )
 
-    def _get_builtin_tools(self) -> List[BaseTool]:
-        """获取所有内置工具"""
-        return [
+    def _get_all_tools(self) -> List[BaseTool]:
+        """获取所有工具（内置工具 + Skill 工具）"""
+        # 内置工具
+        tools = [
             read_file,
             write_file,
             list_directory,
@@ -118,15 +126,25 @@ class OllamaPilotAgent:
             web_fetch,
         ]
 
+        # 收集所有 Skill 提供的工具
+        skill_tools = self.skill_registry.get_all_tools()
+        tools.extend(skill_tools)
+
+        if self.verbose and skill_tools:
+            print(f"🔧 加载 {len(skill_tools)} 个 Skill 工具")
+
+        return tools
+
     def _build_middleware(self, max_tool_calls: int) -> List[Any]:
         """
         构建中间件列表
 
         中间件执行顺序（从前到后）:
         1. SkillSelectorMiddleware - Skill 选择
-        2. ToolLoggingMiddleware - 工具调用日志
-        3. ToolRetryMiddleware - 工具重试
-        4. ToolCallLimitMiddleware - 工具调用限制
+        2. Skill 自定义中间件（如 GraphRAGMiddleware）
+        3. ToolLoggingMiddleware - 工具调用日志
+        4. ToolRetryMiddleware - 工具重试
+        5. ToolCallLimitMiddleware - 工具调用限制
         """
         middleware = []
 
@@ -138,16 +156,23 @@ class OllamaPilotAgent:
         )
         middleware.append(selector)
 
-        # 2. 工具调用日志
+        # 2. Skill 自定义中间件（动态收集）
+        skill_middlewares = self.skill_registry.get_all_middlewares()
+        for mw in skill_middlewares:
+            middleware.append(mw)
+            if self.verbose:
+                print(f"🔌 加载 Skill 中间件: {mw.name if hasattr(mw, 'name') else type(mw).__name__}")
+
+        # 3. 工具调用日志
         if self.verbose:
             logging_mw = ToolLoggingMiddleware(verbose=True)
             middleware.append(logging_mw)
 
-        # 3. 工具重试
+        # 4. 工具重试
         retry_mw = ToolRetryMiddleware(max_retries=2)
         middleware.append(retry_mw)
 
-        # 4. 工具调用限制
+        # 5. 工具调用限制
         limit_mw = ToolCallLimitMiddleware(run_limit=max_tool_calls)
         middleware.append(limit_mw)
 
@@ -275,6 +300,26 @@ class OllamaPilotAgent:
             self.checkpointer.delete(config)
         except Exception:
             pass
+
+    def get_skill_stats(self, skill_name: str) -> Optional[Dict[str, Any]]:
+        """
+        获取 Skill 的统计信息
+
+        Args:
+            skill_name: Skill 名称
+
+        Returns:
+            统计信息字典，如果 Skill 不存在或不支持返回 None
+        """
+        skill = self.skill_registry.get_skill(skill_name)
+        if not skill:
+            return None
+
+        # 检查 Skill 是否有 get_stats 方法
+        if hasattr(skill, 'get_stats'):
+            return skill.get_stats()
+
+        return None
 
 
 def create_ollama_agent(

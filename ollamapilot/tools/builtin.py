@@ -246,11 +246,13 @@ def web_search_setup(action: str = "status") -> str:
 def read_file(file_path: str, limit: int = 1000) -> str:
     """
     读取文件内容
-    
+
+    支持文本文件和 PDF 文件。PDF 文件会自动提取文本内容。
+
     Args:
         file_path: 文件路径（相对或绝对）
         limit: 最大读取行数，默认1000行
-        
+
     Returns:
         文件内容
     """
@@ -258,10 +260,18 @@ def read_file(file_path: str, limit: int = 1000) -> str:
         path = Path(file_path)
         if not path.exists():
             return f"❌ 文件不存在: {file_path}"
-        
+
         if not path.is_file():
             return f"❌ 不是文件: {file_path}"
-        
+
+        # 检查文件类型
+        suffix = path.suffix.lower()
+
+        # PDF 文件特殊处理
+        if suffix == '.pdf':
+            return _read_pdf_file(path, limit)
+
+        # 普通文本文件
         with open(path, 'r', encoding='utf-8', errors='ignore') as f:
             lines = []
             for i, line in enumerate(f):
@@ -269,12 +279,39 @@ def read_file(file_path: str, limit: int = 1000) -> str:
                     lines.append(f"\n... (已截断，共读取 {limit} 行)")
                     break
                 lines.append(line.rstrip())
-            
+
             content = '\n'.join(lines)
             return f"📄 文件: {file_path}\n{'='*50}\n{content}"
-            
+
     except Exception as e:
         return f"❌ 读取失败: {e}"
+
+
+def _read_pdf_file(path: Path, limit: int = 1000) -> str:
+    """读取 PDF 文件并提取文本"""
+    try:
+        import PyPDF2
+
+        text = []
+        with open(path, 'rb') as f:
+            reader = PyPDF2.PdfReader(f)
+            total_pages = len(reader.pages)
+
+            for i, page in enumerate(reader.pages):
+                if i >= limit:
+                    text.append(f"\n... (已截断，共读取 {limit} 页，总共 {total_pages} 页)")
+                    break
+                page_text = page.extract_text()
+                if page_text:
+                    text.append(f"\n--- 第 {i+1} 页 ---\n{page_text}")
+
+        content = '\n'.join(text)
+        return f"📄 PDF 文件: {path}\n{'='*50}\n{content}"
+
+    except ImportError:
+        return f"❌ 未安装 PyPDF2，无法读取 PDF。请运行: pip install PyPDF2"
+    except Exception as e:
+        return f"❌ 读取 PDF 失败: {e}"
 
 
 @tool

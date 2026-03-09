@@ -86,6 +86,22 @@ class Skill(ABC):
         """
         return None
     
+    def get_middleware(self) -> Optional[Any]:
+        """
+        返回自定义中间件（可选）
+
+        Skill 可以提供自己的中间件，在模型调用前后执行自定义逻辑。
+        例如 GraphRAG Skill 提供检索增强中间件。
+
+        Returns:
+            AgentMiddleware 实例或 None
+
+        Example:
+            >>> def get_middleware(self) -> Optional[AgentMiddleware]:
+            ...     return MyCustomMiddleware()
+        """
+        return None
+    
     def on_activate(self) -> None:
         """Skill 被激活时调用"""
         pass
