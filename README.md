@@ -178,9 +178,11 @@ agent = create_agent(model, middleware=[mcp_mw])
 
 ## 🛠️ 内置工具
 
+### 核心工具
+
 | 工具 | 功能 | 示例 |
 |------|------|------|
-| `web_search` | 网络搜索 | `web_search.invoke({"query": "天气"})` |
+| `web_search` | 网络搜索（自动部署） | `web_search.invoke({"query": "天气"})` |
 | `web_fetch` | 获取网页内容 | `web_fetch.invoke({"url": "https://..."})` |
 | `python_exec` | 执行 Python 代码 | `python_exec.invoke({"code": "1+1"})` |
 | `read_file` | 读取文件 | `read_file.invoke({"path": "file.txt"})` |
@@ -189,6 +191,35 @@ agent = create_agent(model, middleware=[mcp_mw])
 | `search_files` | 搜索文件 | `search_files.invoke({"pattern": "*.py"})` |
 | `shell_exec` | 执行 Shell 命令 | `shell_exec.invoke({"command": "ls"})` |
 | `shell_script` | 执行 Shell 脚本 | `shell_script.invoke({"script": "echo hello"})` |
+
+### 🔍 Web 搜索配置
+
+`web_search` 工具依赖 [SearXNG](https://github.com/searxng/searxng) 搜索引擎，支持**自动部署**：
+
+```python
+# 首次使用时会自动检测并启动 SearXNG
+agent.invoke("搜索 Python 3.13 新特性")
+
+# 手动管理服务
+from ollamapilot.tools.builtin import web_search_setup
+
+web_search_setup("status")  # 检查状态
+web_search_setup("start")   # 启动服务
+web_search_setup("stop")    # 停止服务
+web_search_setup("logs")    # 查看日志
+```
+
+**部署方式**：
+
+1. **全自动部署**（推荐）：首次使用时会自动完成：
+   - 检查 Docker 是否安装
+   - 自动拉取 `searxng/searxng` 镜像（如本地不存在）
+   - 创建并启动容器
+   - 等待服务就绪
+
+2. **手动部署**：`docker run -d --name searxng -p 8080:8080 searxng/searxng`
+
+3. **远程服务**：设置环境变量 `export SEARXNG_URL='http://your-searxng-url'`
 
 ---
 

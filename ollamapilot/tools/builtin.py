@@ -15,9 +15,227 @@ import contextlib
 import traceback
 import urllib.request
 import urllib.parse
+import time
 from pathlib import Path
 from typing import Optional, List
 from langchain_core.tools import tool
+
+
+# =============================================================================
+# SearXNG 管理工具
+# =============================================================================
+
+def _check_searxng_running(url: str = "http://localhost:8080") -> bool:
+    """检查 SearXNG 是否正在运行"""
+    try:
+        req = urllib.request.Request(
+            f"{url}/healthz",
+            headers={"User-Agent": "OllamaPilot/1.0"},
+            method="GET"
+        )
+        with urllib.request.urlopen(req, timeout=5) as response:
+            return response.status == 200
+    except Exception:
+        return False
+
+
+def _check_docker_image_exists(image_name: str = "searxng/searxng") -> bool:
+    """检查 Docker 镜像是否已存在"""
+    try:
+        result = subprocess.run(
+            ["docker", "images", "-q", image_name],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        return bool(result.stdout.strip())
+    except Exception:
+        return False
+
+
+def _pull_docker_image(image_name: str = "searxng/searxng") -> tuple[bool, str]:
+    """
+    拉取 Docker 镜像
+    
+    Returns:
+        (是否成功, 消息)
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "pull", image_name],
+            capture_output=True,
+            text=True,
+            timeout=120  # 拉取镜像可能需要较长时间
+        )
+        if result.returncode == 0:
+            return True, f"镜像 {image_name} 拉取成功"
+        else:
+            return False, f"镜像拉取失败: {result.stderr}"
+    except subprocess.TimeoutExpired:
+        return False, "镜像拉取超时"
+    except Exception as e:
+        return False, f"镜像拉取失败: {str(e)}"
+
+
+def _start_searxng_docker() -> tuple[bool, str]:
+    """
+    自动启动 SearXNG Docker 容器
+    
+    完整流程：
+    1. 检查 Docker 是否安装
+    2. 检查是否已有容器在运行
+    3. 检查是否有停止的容器
+    4. 检查镜像是否存在（不存在则自动拉取）
+    5. 创建并启动容器
+    6. 等待服务就绪
+    
+    Returns:
+        (是否成功, 消息)
+    """
+    try:
+        # 步骤 1: 检查 Docker 是否安装
+        result = subprocess.run(
+            ["docker", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode != 0:
+            return False, "Docker 未安装或未启动"
+        
+        # 步骤 2: 检查是否已有容器在运行
+        result = subprocess.run(
+            ["docker", "ps", "-q", "-f", "name=searxng"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if result.stdout.strip():
+            # 容器已在运行，检查健康状态
+            if _check_searxng_running():
+                return True, "SearXNG 容器已在运行"
+            else:
+                return False, "SearXNG 容器存在但无法访问，请检查日志: docker logs searxng"
+        
+        # 步骤 3: 检查是否有停止的容器
+        result = subprocess.run(
+            ["docker", "ps", "-aq", "-f", "name=searxng"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if result.stdout.strip():
+            # 启动已存在的容器
+            subprocess.run(
+                ["docker", "start", "searxng"],
+                capture_output=True,
+                timeout=30
+            )
+        else:
+            # 步骤 4: 检查镜像是否存在，不存在则自动拉取
+            if not _check_docker_image_exists("searxng/searxng"):
+                success, message = _pull_docker_image("searxng/searxng")
+                if not success:
+                    return False, f"镜像拉取失败: {message}"
+            
+            # 步骤 5: 创建新容器
+            subprocess.run(
+                [
+                    "docker", "run", "-d",
+                    "--name", "searxng",
+                    "-p", "8080:8080",
+                    "-e", "BASE_URL=http://localhost:8080/",
+                    "-e", "INSTANCE_NAME=OllamaPilot-SearXNG",
+                    "searxng/searxng"
+                ],
+                capture_output=True,
+                timeout=60
+            )
+        
+        # 步骤 6: 等待服务启动
+        for i in range(30):  # 最多等待30秒
+            time.sleep(1)
+            if _check_searxng_running():
+                return True, "SearXNG 启动成功"
+        
+        return False, "SearXNG 启动超时，请检查日志: docker logs searxng"
+        
+    except subprocess.TimeoutExpired:
+        return False, "Docker 命令执行超时"
+    except FileNotFoundError:
+        return False, "Docker 命令未找到，请确保 Docker 已安装"
+    except Exception as e:
+        return False, f"启动失败: {str(e)}"
+
+
+@tool
+def web_search_setup(action: str = "status") -> str:
+    """
+    管理 SearXNG 搜索服务的部署和配置
+    
+    用于自动部署、检查和管理本地 SearXNG 搜索引擎。
+    
+    Args:
+        action: 操作类型
+            - "status": 检查服务状态
+            - "start": 自动启动 SearXNG Docker 容器
+            - "stop": 停止 SearXNG 容器
+            - "logs": 查看容器日志
+            
+    Returns:
+        操作结果信息
+        
+    Examples:
+        web_search_setup("status")  # 检查状态
+        web_search_setup("start")   # 自动部署并启动
+    """
+    searxng_url = os.environ.get("SEARXNG_URL", "http://localhost:8080")
+    
+    if action == "status":
+        is_running = _check_searxng_running(searxng_url)
+        
+        if is_running:
+            return f"✅ SearXNG 服务正常运行\n地址: {searxng_url}\n\nweb_search 工具已可用"
+        else:
+            return f"⚠️ SearXNG 服务未运行\n地址: {searxng_url}\n\n解决方案:\n1. 自动部署: web_search_setup('start')\n2. 手动部署: docker run -d --name searxng -p 8080:8080 searxng/searxng\n3. 使用远程: 设置环境变量 SEARXNG_URL"
+    
+    elif action == "start":
+        success, message = _start_searxng_docker()
+        if success:
+            return f"✅ {message}\n\nSearXNG 地址: http://localhost:8080\nweb_search 工具现在可以使用了"
+        else:
+            return f"❌ {message}\n\n手动部署命令:\ndocker run -d --name searxng -p 8080:8080 -e BASE_URL=http://localhost:8080/ searxng/searxng"
+    
+    elif action == "stop":
+        try:
+            subprocess.run(
+                ["docker", "stop", "searxng"],
+                capture_output=True,
+                timeout=30
+            )
+            return "✅ SearXNG 已停止"
+        except Exception as e:
+            return f"❌ 停止失败: {str(e)}"
+    
+    elif action == "logs":
+        try:
+            result = subprocess.run(
+                ["docker", "logs", "--tail", "50", "searxng"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode == 0:
+                return f"📋 SearXNG 日志:\n{result.stdout}"
+            else:
+                return f"❌ 获取日志失败: {result.stderr}"
+        except Exception as e:
+            return f"❌ 获取日志失败: {str(e)}"
+    
+    else:
+        return f"❌ 未知操作: {action}\n可用操作: status, start, stop, logs"
 
 
 # =============================================================================
@@ -421,11 +639,13 @@ def python_exec(code: str, timeout: int = 30) -> str:
 # =============================================================================
 
 @tool
-def web_search(query: str, count: int = 5) -> str:
+def web_search(query: str, count: int = 5, auto_start: bool = True) -> str:
     """
     使用 SearXNG 本地搜索引擎进行网络搜索
     
-    需要本地部署 SearXNG：
+    支持自动部署：如果检测到 SearXNG 未运行，会尝试自动启动 Docker 容器
+    
+    手动部署命令：
         docker run -d --name searxng -p 8080:8080 searxng/searxng
     
     或使用环境变量指定远程地址：
@@ -434,14 +654,25 @@ def web_search(query: str, count: int = 5) -> str:
     Args:
         query: 搜索查询
         count: 返回结果数量（1-20）
+        auto_start: 是否自动尝试启动 SearXNG（默认True）
         
     Returns:
         搜索结果
     """
+    # 获取 SearXNG 地址
+    searxng_url = os.environ.get("SEARXNG_URL", "http://localhost:8080")
+    
+    # 检查 SearXNG 是否运行
+    if not _check_searxng_running(searxng_url):
+        if auto_start:
+            # 尝试自动启动
+            success, message = _start_searxng_docker()
+            if not success:
+                return f"❌ SearXNG 未运行，自动启动失败\n{message}\n\n你可以：\n1. 手动部署: docker run -d --name searxng -p 8080:8080 searxng/searxng\n2. 使用远程: export SEARXNG_URL='http://your-searxng-url'\n3. 检查状态: web_search_setup('status')"
+        else:
+            return f"❌ SearXNG 未运行\n地址: {searxng_url}\n\n解决方案:\n1. 自动部署: web_search_setup('start')\n2. 手动部署: docker run -d --name searxng -p 8080:8080 searxng/searxng"
+    
     try:
-        # 获取 SearXNG 地址，默认本地
-        searxng_url = os.environ.get("SEARXNG_URL", "http://localhost:8080")
-        
         # 限制结果数量
         count = max(1, min(20, count))
         
@@ -491,7 +722,7 @@ def web_search(query: str, count: int = 5) -> str:
         return "\n".join(output)
         
     except urllib.error.URLError as e:
-        return f"❌ 无法连接到 SearXNG ({os.environ.get('SEARXNG_URL', 'http://localhost:8080')})\n请确保：\n1. SearXNG 已启动: docker run -d -p 8080:8080 searxng/searxng\n2. 或设置环境变量: export SEARXNG_URL='http://your-searxng-url'\n错误: {str(e)}"
+        return f"❌ 无法连接到 SearXNG ({searxng_url})\n错误: {str(e)}"
     except Exception as e:
         return f"❌ 搜索错误: {str(e)}"
 
