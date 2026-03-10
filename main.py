@@ -197,51 +197,53 @@ def main():
 
             # 使用流式输出
             full_response = ""
+            has_output = False
             try:
                 for chunk in agent.stream(user_input, thread_id=thread_id):
                     # 提取 chunk 中的内容
                     if isinstance(chunk, dict):
                         # 处理不同格式的 chunk
+                        content = None
                         if "messages" in chunk:
                             messages = chunk["messages"]
                             if messages and hasattr(messages[-1], "content"):
                                 content = messages[-1].content
-                                # 只输出新增的部分
-                                if len(content) > len(full_response):
-                                    new_text = content[len(full_response):]
-                                    print(new_text, end="", flush=True)
-                                    full_response = content
                         elif "content" in chunk:
-                            new_text = chunk["content"]
-                            print(new_text, end="", flush=True)
-                            full_response += new_text
+                            content = chunk["content"]
                         elif "agent" in chunk and "messages" in chunk["agent"]:
                             messages = chunk["agent"]["messages"]
                             if messages and hasattr(messages[-1], "content"):
                                 content = messages[-1].content
-                                if len(content) > len(full_response):
-                                    new_text = content[len(full_response):]
-                                    print(new_text, end="", flush=True)
-                                    full_response = content
-                        # 处理工具消息
-                        elif "tools" in chunk:
-                            # 工具调用完成，继续等待模型回复
-                            pass
+                        
+                        # 输出新增内容
+                        if content and len(content) > len(full_response):
+                            new_text = content[len(full_response):]
+                            if new_text.strip():
+                                print(new_text, end="", flush=True)
+                                has_output = True
+                            full_response = content
                 
-                # 如果流式输出没有内容，尝试使用 invoke
-                if not full_response:
+                # 输出结束
+                if has_output:
+                    print("\n")
+                else:
+                    # 流式输出没有内容，使用 invoke
                     print("\n⏳ 生成回答中...")
                     response = agent.invoke(user_input, thread_id=thread_id)
                     if response:
-                        print(f"\n助手: {response}\n")
-                else:
-                    print("\n")  # 输出结束后换行
+                        print(f"{response}\n")
+                    else:
+                        print("（无回答）\n")
                     
             except Exception as e:
                 # 如果流式输出失败，回退到普通 invoke
                 print(f"\n⚠️ 流式输出失败，使用普通模式: {e}\n")
-                response = agent.invoke(user_input, thread_id=thread_id)
-                print(f"助手: {response}\n")
+                try:
+                    response = agent.invoke(user_input, thread_id=thread_id)
+                    if response:
+                        print(f"助手: {response}\n")
+                except Exception as e2:
+                    print(f"❌ 调用失败: {e2}\n")
 
         except KeyboardInterrupt:
             print("\n\n👋 再见！")

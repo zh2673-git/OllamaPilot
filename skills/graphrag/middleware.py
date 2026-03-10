@@ -76,14 +76,29 @@ class GraphRAGMiddleware(AgentMiddleware):
 
         query = str(last_message.content)
 
+        # 检查是否是知识库相关问题
+        # 如果查询太短或不包含知识库相关关键词，跳过检索
+        if len(query) < 5:
+            if self.verbose:
+                print("📝 查询太短，跳过知识库检索")
+            return None
+
+        # 检查是否是闲聊/通用问题
+        chat_keywords = ['你好', '你是谁', '你能做什么', '谢谢', '再见', '请', '能否', '可以', '通俗', '解释一下', '什么意思']
+        is_chat = any(kw in query for kw in chat_keywords)
+        if is_chat and len(query) < 20:
+            if self.verbose:
+                print("📝 闲聊问题，跳过知识库检索")
+            return None
+
         # 步骤 1: 从查询中提取实体
         query_entities = self.entity_extractor.extract_from_query(query)
 
         if not query_entities:
-            # 没有提取到实体，回退到纯向量检索
+            # 没有提取到实体，不回退检索，直接让模型处理
             if self.verbose:
-                print("📝 未提取到实体，使用纯向量检索")
-            return self._fallback_vector_search(state, query)
+                print("📝 未提取到实体，跳过知识库检索")
+            return None
 
         if self.verbose:
             entity_names = [e["name"] for e in query_entities]
