@@ -2,14 +2,23 @@
 知识库管理器
 
 自动扫描、索引和管理知识库文档。
+集成 WordAligner 提供精确位置映射能力。
 """
 
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 import os
+import time
 
 from skills.graphrag.utils import DocumentProcessor
 from skills.graphrag.services import GraphRAGService, LightweightEntityExtractor, Entity
+from skills.graphrag.word_aligner import (
+    WordAligner, 
+    AlignedEntity, 
+    AlignmentStatus,
+    format_alignment_report,
+    calculate_chunk_offsets
+)
 
 
 class KnowledgeBaseManager:
@@ -20,6 +29,7 @@ class KnowledgeBaseManager:
     1. 自动扫描知识库目录
     2. 增量索引新文档
     3. 管理文档状态
+    4. 集成 WordAligner 精确位置映射
 
     使用方法：
         kb = KnowledgeBaseManager(graph_service, entity_extractor)
@@ -33,7 +43,9 @@ class KnowledgeBaseManager:
         self,
         graph_service: GraphRAGService,
         entity_extractor: LightweightEntityExtractor,
-        document_processor: Optional[DocumentProcessor] = None
+        document_processor: Optional[DocumentProcessor] = None,
+        enable_word_aligner: bool = True,
+        fuzzy_threshold: float = 0.75
     ):
         self.graph_service = graph_service
         self.entity_extractor = entity_extractor
@@ -42,6 +54,13 @@ class KnowledgeBaseManager:
             chunk_size=2000,
             chunk_overlap=200
         )
+        
+        # 初始化 WordAligner
+        self.enable_word_aligner = enable_word_aligner
+        if enable_word_aligner:
+            self.word_aligner = WordAligner(fuzzy_threshold=fuzzy_threshold)
+        else:
+            self.word_aligner = None
 
     def scan_and_index(self, kb_dir: str) -> Dict[str, Any]:
         """
@@ -66,6 +85,8 @@ class KnowledgeBaseManager:
             return {"indexed": 0, "skipped": 0, "errors": 0, "files": []}
 
         print(f"📚 发现 {len(files)} 个文档，开始索引...")
+        if self.enable_word_aligner:
+            print(f"   🎯 WordAligner 已启用 (模糊阈值: {self.word_aligner.fuzzy_threshold})")
 
         # 获取已索引的文档ID
         indexed_docs = self._get_indexed_documents()
@@ -125,31 +146,29 @@ class KnowledgeBaseManager:
             return set()
 
     def _index_document(self, file_path: Path, doc_id: str, verbose: bool = True) -> None:
-        """索引单个文档
+        """索引单个文档（集成 WordAligner）
 
         Args:
             file_path: 文件路径
             doc_id: 文档ID
             verbose: 是否打印详细输出
         """
-        import time
-
         if verbose:
             print(f"    📖 读取文档: {file_path.name}")
 
-        # 读取文档
-        text = self.document_processor.read_document(str(file_path))
+        # 读取文档（保存全文用于对齐）
+        full_text = self.document_processor.read_document(str(file_path))
 
-        if not text:
+        if not full_text:
             raise ValueError("无法读取文档内容")
 
         if verbose:
-            print(f"    ✅ 读取完成，长度: {len(text)} 字符")
+            print(f"    ✅ 读取完成，长度: {len(full_text)} 字符")
 
         # 分块
         if verbose:
             print(f"    🔄 分块中...")
-        chunks = self.document_processor.chunk_text(text)
+        chunks = self.document_processor.chunk_text(full_text)
         if verbose:
             print(f"    ✅ 分块完成: {len(chunks)} 块")
 
@@ -157,10 +176,16 @@ class KnowledgeBaseManager:
         if len(chunks) > 100 and verbose:
             print(f"    ⚠️ 文档较大 ({len(chunks)} 块)，索引可能需要较长时间...")
 
+        # 计算每块在全文中的偏移量
+        chunk_offsets = calculate_chunk_offsets(full_text, chunks)
+
         # 处理每个块
         if verbose:
             print(f"    🔄 索引 {len(chunks)} 个块...")
         start_time = time.time()
+
+        # 收集所有实体用于对齐
+        all_raw_entities = []
 
         for i, chunk in enumerate(chunks):
             try:
@@ -171,15 +196,26 @@ class KnowledgeBaseManager:
                 entities = self.entity_extractor.extract(chunk)
                 extract_time = time.time() - step_start
 
-                # 步骤2: 转换为 Entity 对象
+                # 收集原始实体信息
+                for e in entities:
+                    all_raw_entities.append({
+                        'name': e.name,
+                        'type': e.type,
+                        'chunk_index': i,
+                        'start': e.start,
+                        'end': e.end
+                    })
+
+                # 步骤2: 添加到图谱（这会调用 Embedding 模型）
+                step_start = time.time()
+                chunk_doc_id = f"{doc_id}_{i}"
+                
+                # 临时使用简单位置，后续会更新为对齐后的位置
                 entity_objects = [
                     Entity(name=e.name, type=e.type, positions=[(e.start, e.end)])
                     for e in entities
                 ]
-
-                # 步骤3: 添加到图谱（这会调用 Embedding 模型）
-                step_start = time.time()
-                chunk_doc_id = f"{doc_id}_{i}"
+                
                 self.graph_service.add_document(
                     text=chunk,
                     doc_id=chunk_doc_id,
@@ -217,13 +253,167 @@ class KnowledgeBaseManager:
                 time.sleep(1)
                 continue
 
+        # 步骤3: 使用 WordAligner 对齐所有实体
+        if self.enable_word_aligner and all_raw_entities:
+            if verbose:
+                print(f"    🎯 对齐 {len(all_raw_entities)} 个实体到原文...")
+            
+            align_start = time.time()
+            aligned_entities = self.word_aligner.align_entities(
+                entities=all_raw_entities,
+                source_text=full_text,
+                chunks=chunks,
+                chunk_offsets=chunk_offsets
+            )
+            align_time = time.time() - align_start
+            
+            if verbose:
+                print(f"    ✅ 对齐完成: {len(aligned_entities)} 个实体 ({align_time:.2f}s)")
+                # 显示对齐报告
+                report = format_alignment_report(aligned_entities, full_text, max_display=5)
+                print(report)
+            
+            # 更新图谱中的实体位置（使用对齐后的位置）
+            self._update_entity_positions(doc_id, aligned_entities, full_text)
+
         total_time = time.time() - start_time
         if verbose:
             print(f"    ✅ 文档索引完成，总耗时: {total_time:.1f}s")
 
+    def _update_entity_positions(
+        self, 
+        doc_id: str, 
+        aligned_entities: List[AlignedEntity],
+        full_text: str
+    ):
+        """更新图谱中实体的位置信息（使用对齐后的精确位置）"""
+        for aligned in aligned_entities:
+            # 更新实体索引中的位置信息
+            if aligned.name in self.graph_service.entity_index:
+                entity_info = self.graph_service.entity_index[aligned.name]
+                
+                # 添加对齐后的位置（如果还没有）
+                new_position = (aligned.start, aligned.end)
+                if new_position not in entity_info.get("positions", []):
+                    if "positions" not in entity_info:
+                        entity_info["positions"] = []
+                    entity_info["positions"].append(new_position)
+                
+                # 保存对齐状态
+                entity_info["alignment_status"] = aligned.status.value
+                entity_info["similarity"] = aligned.similarity
+                
+                # 保存上下文片段（用于验证）
+                context = full_text[max(0, aligned.start-20):min(len(full_text), aligned.end+20)]
+                entity_info["context"] = context
+
+    def get_entity_verification_report(self, entity_name: str) -> Optional[Dict[str, Any]]:
+        """
+        获取实体验证报告
+        
+        Args:
+            entity_name: 实体名称
+            
+        Returns:
+            验证报告字典
+        """
+        if entity_name not in self.graph_service.entity_index:
+            return None
+        
+        entity_info = self.graph_service.entity_index[entity_name]
+        
+        return {
+            "entity_name": entity_name,
+            "entity_type": entity_info.get("type", "Unknown"),
+            "document_count": len(entity_info.get("doc_ids", set())),
+            "alignment_status": entity_info.get("alignment_status", "unknown"),
+            "similarity": entity_info.get("similarity", 1.0),
+            "positions": entity_info.get("positions", []),
+            "context": entity_info.get("context", ""),
+        }
+
+    def format_entity_highlight(
+        self, 
+        entity_name: str, 
+        source_text: str,
+        context_chars: int = 30
+    ) -> Optional[str]:
+        """
+        格式化实体高亮显示
+        
+        Args:
+            entity_name: 实体名称
+            source_text: 原文
+            context_chars: 上下文字符数
+            
+        Returns:
+            带高亮的文本
+        """
+        if entity_name not in self.graph_service.entity_index:
+            return None
+        
+        entity_info = self.graph_service.entity_index[entity_name]
+        positions = entity_info.get("positions", [])
+        
+        if not positions:
+            return None
+        
+        highlights = []
+        for start, end in positions[:5]:  # 最多显示5个位置
+            before = source_text[max(0, start-context_chars):start]
+            entity = source_text[start:end]
+            after = source_text[end:min(len(source_text), end+context_chars)]
+            
+            highlights.append(f"  ...{before}[[{entity}]]{after}...")
+        
+        return "\n".join(highlights)
+
+    def get_alignment_stats(self) -> Dict[str, Any]:
+        """
+        获取对齐统计信息
+        
+        Returns:
+            统计信息字典
+        """
+        stats = {
+            "total_entities": len(self.graph_service.entity_index),
+            "exact_match": 0,
+            "lesser_match": 0,
+            "fuzzy_match": 0,
+            "unmatched": 0,
+            "unknown": 0,
+        }
+        
+        for entity_name, entity_info in self.graph_service.entity_index.items():
+            status = entity_info.get("alignment_status", "unknown")
+            if status == "exact":
+                stats["exact_match"] += 1
+            elif status == "lesser":
+                stats["lesser_match"] += 1
+            elif status == "fuzzy":
+                stats["fuzzy_match"] += 1
+            elif status == "unmatched":
+                stats["unmatched"] += 1
+            else:
+                stats["unknown"] += 1
+        
+        # 计算百分比
+        total = stats["total_entities"]
+        if total > 0:
+            stats["exact_match_pct"] = f"{stats['exact_match'] / total * 100:.1f}%"
+            stats["fuzzy_match_pct"] = f"{stats['fuzzy_match'] / total * 100:.1f}%"
+        
+        return stats
+
     def get_stats(self) -> Dict[str, Any]:
         """获取知识库统计信息"""
-        return self.graph_service.get_stats()
+        base_stats = self.graph_service.get_stats()
+        
+        if self.enable_word_aligner:
+            alignment_stats = self.get_alignment_stats()
+            base_stats["alignment"] = alignment_stats
+        
+        return base_stats
 
     def search(self, query: str, n_results: int = 5) -> List[Dict]:
         """搜索知识库"""

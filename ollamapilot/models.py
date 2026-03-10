@@ -3,11 +3,18 @@
 
 提供 Ollama 模型的统一初始化和查询功能。
 基于 LangChain 1.0+ 的 init_chat_model 和 ChatOllama。
+支持从 .env 配置文件读取模型设置。
 """
 
 from typing import Optional, List, Tuple
 import requests
 from langchain_ollama import ChatOllama
+
+from ollamapilot.config import get_config
+
+
+# 获取配置
+config = get_config()
 
 
 # Embedding 模型特征关键字
@@ -102,36 +109,54 @@ def list_ollama_chat_models(base_url: str = "http://localhost:11434") -> List[st
 
 
 def init_ollama_model(
-    model: str,
-    temperature: float = 0.7,
-    base_url: str = "http://localhost:11434",
+    model: Optional[str] = None,
+    temperature: Optional[float] = None,
+    base_url: Optional[str] = None,
+    use_config: bool = True,
     **kwargs
 ) -> ChatOllama:
     """
     初始化 Ollama 模型
     
     基于 LangChain 1.0+ 的 ChatOllama，针对小模型优化配置。
+    支持从 .env 配置文件读取默认设置。
     
     Args:
-        model: 模型名称（如 "qwen3.5:4b"）
-        temperature: 温度参数，控制随机性（0-2）
-        base_url: Ollama 服务地址
+        model: 模型名称（如 "qwen3.5:4b"），默认从配置文件读取
+        temperature: 温度参数，默认从配置文件读取
+        base_url: Ollama 服务地址，默认从配置文件读取
+        use_config: 是否使用配置文件中的设置
         **kwargs: 其他参数传递给 ChatOllama
         
     Returns:
         ChatOllama 实例
         
     Example:
-        >>> llm = init_ollama_model("qwen3.5:4b", temperature=0.7)
+        >>> llm = init_ollama_model()  # 使用配置文件设置
+        >>> llm = init_ollama_model("qwen3.5:4b", temperature=0.7)  # 自定义设置
         >>> response = llm.invoke("你好")
     """
+    # 从配置文件获取默认值
+    if use_config:
+        model = model or config.chat_model
+        temperature = temperature if temperature is not None else config.chat_temperature
+        base_url = base_url or config.ollama_base_url
+        num_ctx = kwargs.pop('num_ctx', config.chat_num_ctx)
+        num_predict = kwargs.pop('num_predict', config.chat_num_predict)
+    else:
+        model = model or "qwen3.5:4b"
+        temperature = temperature if temperature is not None else 0.7
+        base_url = base_url or "http://localhost:11434"
+        num_ctx = kwargs.pop('num_ctx', 8192)
+        num_predict = kwargs.pop('num_predict', 2048)
+    
     return ChatOllama(
         model=model,
         temperature=temperature,
         base_url=base_url,
         # 小模型优化配置
-        num_ctx=8192,  # 上下文窗口
-        num_predict=2048,  # 最大生成 token
+        num_ctx=num_ctx,
+        num_predict=num_predict,
         top_p=0.9,
         top_k=40,
         repeat_penalty=1.1,

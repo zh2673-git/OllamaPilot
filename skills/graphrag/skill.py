@@ -3,6 +3,7 @@ GraphRAG Skill - 知识图谱检索增强
 
 基于实体-关系的智能文档问答 Skill。
 作为独立的 Python Skill，遵循 USB 即插即用设计理念。
+支持从 .env 配置文件读取设置。
 """
 
 from typing import List, Optional, Any
@@ -13,6 +14,7 @@ import threading
 import time
 
 from ollamapilot.skills.base import Skill
+from ollamapilot.config import get_config
 
 # GraphRAG Skill 内部模块
 from skills.graphrag.services import (
@@ -36,6 +38,9 @@ from skills.graphrag.tools import (
     init_graphrag_services,
 )
 from skills.graphrag.knowledge_base import KnowledgeBaseManager
+
+# 获取配置
+config = get_config()
 
 
 class GraphRAGSkill(Skill):
@@ -81,24 +86,42 @@ class GraphRAGSkill(Skill):
     def __init__(
         self,
         embedding_model: Optional[str] = None,
-        persist_dir: str = "./data/graphrag",
+        persist_dir: Optional[str] = None,
         enable_auto_retrieval: bool = True,
-        knowledge_base_dir: str = "./knowledge_base"
+        knowledge_base_dir: Optional[str] = None,
+        enable_word_aligner: Optional[bool] = None,
+        fuzzy_threshold: Optional[float] = None,
+        use_config: bool = True
     ):
         """
         初始化 GraphRAG Skill
 
         Args:
-            embedding_model: Embedding模型名称（如 "qwen3-embedding:4b"）
-            persist_dir: 数据持久化目录
+            embedding_model: Embedding模型名称，默认从 .env 读取
+            persist_dir: 数据持久化目录，默认从 .env 读取
             enable_auto_retrieval: 是否启用自动检索中间件
-            knowledge_base_dir: 知识库目录路径
+            knowledge_base_dir: 知识库目录路径，默认从 .env 读取
+            enable_word_aligner: 是否启用 WordAligner，默认从 .env 读取
+            fuzzy_threshold: 模糊匹配阈值，默认从 .env 读取
+            use_config: 是否使用配置文件
         """
         super().__init__()
-        self.embedding_model = embedding_model
-        self.persist_dir = persist_dir
+        
+        # 从配置文件获取默认值
+        if use_config:
+            self.embedding_model = embedding_model or config.embedding_model
+            self.persist_dir = persist_dir or config.graph_rag_persist_dir
+            self.knowledge_base_dir = knowledge_base_dir or config.graph_rag_knowledge_base_dir
+            self.enable_word_aligner = enable_word_aligner if enable_word_aligner is not None else config.graph_rag_enable_word_aligner
+            self.fuzzy_threshold = fuzzy_threshold if fuzzy_threshold is not None else config.graph_rag_fuzzy_threshold
+        else:
+            self.embedding_model = embedding_model or "qwen3-embedding:0.6b"
+            self.persist_dir = persist_dir or "./data/graphrag"
+            self.knowledge_base_dir = knowledge_base_dir or "./knowledge_base"
+            self.enable_word_aligner = enable_word_aligner if enable_word_aligner is not None else True
+            self.fuzzy_threshold = fuzzy_threshold if fuzzy_threshold is not None else 0.75
+            
         self.enable_auto_retrieval = enable_auto_retrieval
-        self.knowledge_base_dir = knowledge_base_dir
         self._indexing_thread = None
         self._indexing_status = {"running": False, "total": 0, "completed": 0, "failed": 0}
 
@@ -156,11 +179,13 @@ class GraphRAGSkill(Skill):
             print(f"💡 提示: 创建 {self.knowledge_base_dir}/ 目录并放入文档，启动时会自动索引")
             return
 
-        # 创建知识库管理器
+        # 创建知识库管理器（集成 WordAligner）
         self.kb_manager = KnowledgeBaseManager(
             graph_service=self.graph_service,
             entity_extractor=self.entity_extractor,
-            document_processor=self.document_processor
+            document_processor=self.document_processor,
+            enable_word_aligner=self.enable_word_aligner,
+            fuzzy_threshold=self.fuzzy_threshold
         )
 
         # 检查是否有新文档需要索引
@@ -354,8 +379,17 @@ class GraphRAGSkill(Skill):
 
 - 文档添加后会自动分块、抽取实体、建立索引
 - 实体抽取使用轻量级规则+词典匹配
+- **集成 WordAligner**: 实体精确映射到原文位置，支持溯源验证
 - 关系推断基于实体共现
 - 支持多跳推理（1-2跳）
+
+## 实体对齐质量说明
+
+系统使用 WordAligner 算法将提取的实体精确对齐到原文：
+- ✓ 精确匹配: 实体文本与原文完全一致
+- ~ 部分匹配: 实体文本与原文略有差异（如标点）
+- ≈ 模糊匹配: 通过相似度算法找到的匹配（相似度≥0.75）
+- 对齐结果可用于验证提取准确性，提升知识库可信度
 """
 
     def get_middleware(self) -> Optional[AgentMiddleware]:
@@ -373,6 +407,13 @@ class GraphRAGSkill(Skill):
             stats = self.graph_service.get_stats()
             print(f"📊 GraphRAG 状态: {stats['total_documents']} 文档, "
                   f"{stats['total_entities']} 实体, {stats['total_relations']} 关系")
+            
+            # 显示 WordAligner 对齐统计
+            if self.enable_word_aligner and self.kb_manager:
+                alignment_stats = self.kb_manager.get_alignment_stats()
+                if alignment_stats['total_entities'] > 0:
+                    print(f"   🎯 对齐质量: {alignment_stats['exact_match_pct']} 精确匹配, "
+                          f"{alignment_stats['fuzzy_match_pct']} 模糊匹配")
 
     def on_deactivate(self) -> None:
         """Skill 被停用时调用"""

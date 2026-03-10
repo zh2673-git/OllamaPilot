@@ -24,7 +24,19 @@ class Entity:
     """实体定义"""
     name: str
     type: str
-    positions: List[Tuple[int, int]]  # 在文档中的位置
+    positions: List[Tuple[int, int]]  # 在文档中的位置 (start, end)
+    alignment_status: Optional[str] = None  # 对齐状态: exact/fuzzy/lesser/unmatched
+    similarity: float = 1.0  # 相似度（模糊匹配时）
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            "name": self.name,
+            "type": self.type,
+            "positions": self.positions,
+            "alignment_status": self.alignment_status,
+            "similarity": self.similarity,
+        }
 
 
 @dataclass
