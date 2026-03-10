@@ -84,23 +84,31 @@ class HybridEntityExtractor:
                 print(f"⚠️ 加载词典失败: {e}，使用默认词典")
 
         # 默认词典（通用实体类型）
-        # 包含跨领域的通用实体，确保即使LLM失败也能抽取实体
+        # 参考v0.1.3，包含更多常见实体，减少规则匹配的误匹配
         return {
             "人名": [
-                # 常见姓氏 + 常见名字
+                # 常见中文姓名（参考v0.1.3）
                 "张三", "李四", "王五", "赵六", "孙七", "周八", "吴九", "郑十",
                 "张伟", "李娜", "王强", "刘洋", "陈明", "杨华", "黄丽", "赵军",
+                "小明", "小红", "老王", "老李", "老张",
             ],
             "组织": [
-                # 常见组织类型
+                # 常见组织和公司（参考v0.1.3）
+                "腾讯", "阿里巴巴", "百度", "字节跳动", "华为", "小米", "京东",
                 "公司", "集团", "大学", "学院", "研究所", "医院", "银行",
-                "学校", "医院", "政府", "部门", "协会", "基金会", "联盟",
+                "学校", "政府", "部门", "协会", "基金会", "联盟",
             ],
             "地点": [
-                # 常见地点
-                "北京", "上海", "广州", "深圳", "杭州", "南京", "成都", "武汉",
+                # 常见地点（参考v0.1.3）
+                "北京", "上海", "广州", "深圳", "杭州", "成都", "武汉", "西安",
+                "南京", "天津", "重庆", "苏州", "郑州", "长沙", "沈阳",
                 "中国", "美国", "日本", "德国", "法国", "英国", "俄罗斯",
                 "亚洲", "欧洲", "北美", "非洲", "大洋洲",
+            ],
+            "产品": [
+                # 常见产品（参考v0.1.3）
+                "iPhone", "iPad", "MacBook", "Windows", "Android",
+                "微信", "支付宝", "QQ", "淘宝", "京东",
             ],
             "时间": [
                 # 时间单位
@@ -114,7 +122,6 @@ class HybridEntityExtractor:
             ],
             "概念": [],
             "事件": [],
-            "产品": [],
         }
 
     def _save_dictionary(self):
@@ -159,21 +166,26 @@ class HybridEntityExtractor:
         dict_entities = self._extract_from_dictionary(text, found_positions)
         entities.extend(dict_entities)
 
-        # 2. LLM抽取（智能路径）
-        # 大模型会从文本中自动识别实体，无需复杂的规则匹配
+        # 2. 规则匹配（补充路径）
+        # 参考v0.1.3实现，识别词典中没有的实体模式
+        pattern_entities = self._extract_with_patterns(text, found_positions)
+        entities.extend(pattern_entities)
+
+        # 3. LLM抽取（智能路径）
+        # 大模型会从文本中自动识别实体
         if use_llm and llm_client:
             llm_entities, llm_relations = self._extract_with_llm(text, llm_client, found_positions)
             entities.extend(llm_entities)
             relations.extend(llm_relations)
 
-            # 3. 动态学习：LLM发现的新实体加入词典
+            # 4. 动态学习：LLM发现的新实体加入词典
             self._learn_from_llm(llm_entities)
 
-        # 3. 去重和排序
+        # 4. 去重和排序
         entities = self._deduplicate_entities(entities)
         entities.sort(key=lambda e: (e.confidence, len(e.name)), reverse=True)
 
-        # 4. 推断共现关系（如果LLM没有提供足够关系）
+        # 5. 推断共现关系（如果LLM没有提供足够关系）
         if len(relations) < 3 and len(entities) > 1:
             cooccurrence_relations = self._infer_cooccurrence_relations(entities, text)
             relations.extend(cooccurrence_relations)
@@ -259,6 +271,105 @@ class HybridEntityExtractor:
             print(f"⚠️ LLM抽取失败: {e}")
 
         return entities, relations
+
+    def _extract_with_patterns(
+        self,
+        text: str,
+        found_positions: Set[int]
+    ) -> List[ExtractedEntity]:
+        """
+        使用规则模式匹配抽取实体
+
+        参考v0.1.3实现，识别词典中没有的实体模式
+        添加过滤条件减少误匹配
+        """
+        entities = []
+
+        # 定义规则模式（参考v0.1.3）
+        patterns = {
+            "人名": r"[\u4e00-\u9fa5]{2,4}(?:先生|女士|博士|教授|经理|老师)?",
+            "组织": r"[\u4e00-\u9fa5]{2,10}(?:公司|集团|大学|学院|研究所|银行|医院)?",
+            "地点": r"[\u4e00-\u9fa5]{2,8}(?:省|市|区|县|镇|村|路|街)?",
+        }
+
+        # 常见姓氏（用于过滤人名）
+        common_surnames = set([
+            '张', '王', '李', '刘', '陈', '杨', '黄', '赵', '周', '吴',
+            '徐', '孙', '马', '朱', '胡', '郭', '何', '高', '林', '罗',
+            '郑', '梁', '谢', '宋', '唐', '许', '韩', '冯', '邓', '曹',
+            '彭', '曾', '肖', '田', '董', '袁', '潘', '于', '蒋', '蔡',
+            '余', '杜', '叶', '程', '苏', '魏', '吕', '丁', '任', '沈',
+        ])
+
+        # 停用词（用于过滤）
+        stop_words = set([
+            '的', '了', '在', '是', '我', '有', '和', '就', '不', '人',
+            '都', '一', '上', '也', '很', '到', '说', '要', '去', '你',
+            '会', '着', '没有', '看', '好', '自己', '这', '那', '之',
+            '与', '及', '等', '或', '但', '而', '因为', '所以', '如果',
+            '虽然', '但是', '然后', '而且', '或者', '还是', '可以', '可能',
+            '应该', '需要', '进行', '通过', '根据', '由于', '因此', '其中',
+            '其他', '已经', '正在', '曾经', '现在', '当时', '这里', '那里',
+            '什么', '怎么', '为什么', '如何', '谁', '哪', '个', '为', '以',
+        ])
+
+        for entity_type, pattern in patterns.items():
+            for match in re.finditer(pattern, text):
+                start, end = match.start(), match.end()
+                name = match.group()
+
+                # 过滤条件1：长度检查
+                if len(name) < 2 or len(name) > 10:
+                    continue
+
+                # 过滤条件2：停用词检查
+                if any(c in stop_words for c in name):
+                    continue
+
+                # 过滤条件3：人名检查（必须以常见姓氏开头）
+                if entity_type == "人名" and name[0] not in common_surnames:
+                    continue
+
+                # 过滤条件4：组织名检查（不应该包含病症相关词汇）
+                if entity_type == "组织":
+                    # 排除明显的非组织词汇
+                    medical_terms = ['病', '症', '炎', '痛', '热', '寒', '风', '汗', '脉', '血']
+                    if any(term in name for term in medical_terms):
+                        continue
+                    # 必须以组织后缀结尾
+                    org_suffixes = ['公司', '集团', '大学', '学院', '研究所', '银行', '医院', '学校', '政府', '部门', '协会', '基金会', '联盟']
+                    if not any(name.endswith(suffix) for suffix in org_suffixes):
+                        continue
+
+                # 过滤条件5：地点名检查（必须以地点后缀结尾）
+                if entity_type == "地点":
+                    location_suffixes = ['省', '市', '区', '县', '镇', '村', '路', '街']
+                    if not any(name.endswith(suffix) for suffix in location_suffixes):
+                        continue
+
+                # 过滤条件4：检查是否已存在（避免重复）
+                is_duplicate = False
+                for existing in entities:
+                    if existing.start == start:
+                        is_duplicate = True
+                        break
+
+                # 过滤条件5：检查是否与词典匹配的结果重叠
+                if is_duplicate or self._is_overlapping(start, end, found_positions):
+                    continue
+
+                entities.append(ExtractedEntity(
+                    name=name,
+                    type=entity_type,
+                    start=start,
+                    end=end,
+                    confidence=0.7,
+                    source="pattern"
+                ))
+                for i in range(start, end):
+                    found_positions.add(i)
+
+        return entities
 
     def extract_from_query(self, text: str) -> List[Dict[str, str]]:
         """
