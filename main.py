@@ -223,7 +223,20 @@ def main():
                                     new_text = content[len(full_response):]
                                     print(new_text, end="", flush=True)
                                     full_response = content
-                print("\n")  # 输出结束后换行
+                        # 处理工具消息
+                        elif "tools" in chunk:
+                            # 工具调用完成，继续等待模型回复
+                            pass
+                
+                # 如果流式输出没有内容，尝试使用 invoke
+                if not full_response:
+                    print("\n⏳ 生成回答中...")
+                    response = agent.invoke(user_input, thread_id=thread_id)
+                    if response:
+                        print(f"\n助手: {response}\n")
+                else:
+                    print("\n")  # 输出结束后换行
+                    
             except Exception as e:
                 # 如果流式输出失败，回退到普通 invoke
                 print(f"\n⚠️ 流式输出失败，使用普通模式: {e}\n")

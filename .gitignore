@@ -150,3 +150,7 @@ Thumbs.db
 *.log
 *.db
 *.sqlite
+
+# Knowledge base and data directories
+knowledge_base/
+data/
