@@ -16,8 +16,7 @@ import threading
 from dataclasses import dataclass
 from enum import Enum
 
-# Ollama 并发锁 - 防止生成模型和向量模型同时调用
-_ollama_lock = threading.Lock()
+from ollamapilot.ollama_lock import OllamaLockContext
 
 
 class IndexingStatus(Enum):
@@ -151,13 +150,14 @@ class DocumentManager:
         
         return doc_id
     
-    def start_indexing(self, doc_id: str, silent: bool = True) -> bool:
+    def start_indexing(self, doc_id: str, silent: bool = True, resume: bool = True) -> bool:
         """
         开始索引文档（后台静默处理）
         
         Args:
             doc_id: 文档ID
             silent: 是否静默模式（只显示50%和100%进度）
+            resume: 是否支持断点续传（默认True）
             
         Returns:
             是否成功启动
@@ -175,6 +175,14 @@ class DocumentManager:
         if doc_info.status == IndexingStatus.COMPLETED:
             print(f"✅ 文档已索引: {doc_info.name}")
             return False
+        
+        # 检查是否支持断点续传
+        if resume and doc_info.status == IndexingStatus.FAILED:
+            print(f"🔄 检测到上次索引失败，尝试断点续传: {doc_info.name}")
+            doc_info.status = IndexingStatus.PENDING
+            doc_info.progress = 0.0
+            doc_info.message = "准备断点续传..."
+            self._save_document_registry()
         
         # 启动后台线程
         doc_info.status = IndexingStatus.RUNNING
@@ -256,71 +264,76 @@ class DocumentManager:
         progress_callback(0.1, "等待Ollama资源...")
         
         # 获取Ollama锁，防止与生成模型并发
-        global _ollama_lock
-        with _ollama_lock:
-            progress_callback(0.15, "初始化服务...")
-            
-            # 初始化服务
-            graph_service = GraphRAGService(
-                persist_dir=str(storage_path),
-                embedding_model=doc_info.model_name
-            )
-        
-        entity_extractor = LightweightEntityExtractor()
-        doc_processor = DocumentProcessor()
-        
-        progress_callback(0.2, "读取文档...")
-        
-        # 读取文档
-        text = doc_processor.read_document(doc_info.file_path)
-        if not text:
-            raise ValueError("无法读取文档内容")
-        
-        progress_callback(0.3, "分块处理...")
-        
-        # 分块
-        chunks = doc_processor.chunk_text(text)
-        doc_info.chunks_count = len(chunks)
-        
-        progress_callback(0.4, f"分块完成: {len(chunks)} 块")
-        
-        # 处理每个块
-        total_entities = 0
-        for i, chunk in enumerate(chunks):
-            chunk_progress = 0.4 + (0.5 * (i + 1) / len(chunks))
-            progress_callback(chunk_progress, f"处理块 {i+1}/{len(chunks)}...")
-            
-            # 抽取实体
-            entities = entity_extractor.extract(chunk)
-            total_entities += len(entities)
-            
-            # 添加到图谱（使用锁保护）
-            chunk_doc_id = f"{doc_id}_{i}"
-            from skills.graphrag.services import Entity
-            entity_objects = [
-                Entity(name=e.name, type=e.type, positions=[(e.start, e.end)])
-                for e in entities
-            ]
-            
-            # 获取Ollama锁，防止与生成模型并发
-            with _ollama_lock:
-                graph_service.add_document(
-                    text=chunk,
-                    doc_id=chunk_doc_id,
-                    metadata={
-                        "source": doc_info.file_path,
-                        "chunk_index": i,
-                        "total_chunks": len(chunks)
-                    },
-                    entities=entity_objects
+        try:
+            with OllamaLockContext(owner=f"index_{doc_info.name}", timeout=300):
+                progress_callback(0.15, "初始化服务...")
+                
+                # 初始化服务
+                graph_service = GraphRAGService(
+                    persist_dir=str(storage_path),
+                    embedding_model=doc_info.model_name
                 )
                 
-                # 每5块保存一次
-                if (i + 1) % 5 == 0:
-                    graph_service._save_index()
-        
-        doc_info.entities_count = total_entities
-        progress_callback(1.0, "索引完成")
+                entity_extractor = LightweightEntityExtractor()
+                doc_processor = DocumentProcessor()
+                
+                progress_callback(0.2, "读取文档...")
+                
+                # 读取文档
+                text = doc_processor.read_document(doc_info.file_path)
+                if not text:
+                    raise ValueError("无法读取文档内容")
+                
+                progress_callback(0.3, "分块处理...")
+                
+                # 分块
+                chunks = doc_processor.chunk_text(text)
+                doc_info.chunks_count = len(chunks)
+                
+                progress_callback(0.4, f"分块完成: {len(chunks)} 块")
+                
+                # 处理每个块
+                total_entities = 0
+                for i, chunk in enumerate(chunks):
+                    chunk_progress = 0.4 + (0.5 * (i + 1) / len(chunks))
+                    progress_callback(chunk_progress, f"处理块 {i+1}/{len(chunks)}...")
+                    
+                    # 抽取实体
+                    entities = entity_extractor.extract(chunk)
+                    total_entities += len(entities)
+                    
+                    # 添加到图谱（使用锁保护）
+                    chunk_doc_id = f"{doc_id}_{i}"
+                    from skills.graphrag.services import Entity
+                    entity_objects = [
+                        Entity(name=e.name, type=e.type, positions=[(e.start, e.end)])
+                        for e in entities
+                    ]
+                    
+                    graph_service.add_document(
+                        text=chunk,
+                        doc_id=chunk_doc_id,
+                        metadata={
+                            "source": doc_info.file_path,
+                            "chunk_index": i,
+                            "total_chunks": len(chunks)
+                        },
+                        entities=entity_objects
+                    )
+                    
+                    # 每5块保存一次
+                    if (i + 1) % 5 == 0:
+                        graph_service._save_index()
+                
+                doc_info.entities_count = total_entities
+                progress_callback(1.0, "索引完成")
+                
+        except TimeoutError as e:
+            progress_callback(0.0, f"获取Ollama锁超时: {e}")
+            raise
+        except Exception as e:
+            progress_callback(0.0, f"索引错误: {e}")
+            raise
     
     def get_document_status(self, doc_id: str) -> Optional[DocumentInfo]:
         """获取文档状态"""
@@ -425,3 +438,29 @@ class DocumentManager:
         if doc_info:
             return doc_info.status == IndexingStatus.COMPLETED
         return False
+    
+    def resume_failed_indexing(self) -> List[str]:
+        """
+        恢复所有失败的索引任务
+        
+        Returns:
+            恢复的文档ID列表
+        """
+        failed_docs = [
+            doc_id for doc_id, doc_info in self.documents.items()
+            if doc_info.status == IndexingStatus.FAILED
+        ]
+        
+        if not failed_docs:
+            print("✅ 没有需要恢复的失败任务")
+            return []
+        
+        print(f"🔄 发现 {len(failed_docs)} 个失败的索引任务，开始恢复...")
+        
+        resumed = []
+        for doc_id in failed_docs:
+            if self.start_indexing(doc_id, silent=True, resume=True):
+                resumed.append(doc_id)
+        
+        print(f"✅ 已恢复 {len(resumed)}/{len(failed_docs)} 个任务")
+        return resumed
