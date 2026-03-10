@@ -553,7 +553,7 @@ class OllamaPilotChat:
 │  /clear                        清空当前对话历史                     │
 │  /info                         显示当前状态信息                     │
 │  /docs                         列出所有文档                         │
-│  /index [path]                 手动索引文档或文件夹                 │
+│  /index [path]                 索引文档/文件夹(默认:knowledge_base) │
 │  /reload                       重新加载 .env 配置                   │
 │  quit/exit/q                   退出程序                             │
 └─────────────────────────────────────────────────────────────────────┘
@@ -687,10 +687,40 @@ class OllamaPilotChat:
                 # 用户指定了路径
                 self.index_document(arg1)
             else:
-                # 交互式选择文件夹
-                folder = self._select_folder_interactive()
-                if folder:
-                    self.index_document(folder)
+                # 默认使用 knowledge_base 文件夹
+                default_kb = Path("./knowledge_base")
+                if default_kb.exists() and default_kb.is_dir():
+                    files = self._get_files_in_directory(str(default_kb))
+                    if files:
+                        print(f"📁 使用默认知识库文件夹: {default_kb}")
+                        print(f"   发现 {len(files)} 个文档")
+                        self.index_document(str(default_kb))
+                    else:
+                        print(f"⚠️ 默认知识库文件夹为空: {default_kb}")
+                        print(f"   支持的格式: {', '.join(self.SUPPORTED_EXTENSIONS)}")
+                        # 询问是否选择其他文件夹
+                        choice = input("\n是否选择其他文件夹? (y/n): ").strip().lower()
+                        if choice == 'y':
+                            folder = self._select_folder_interactive()
+                            if folder:
+                                self.index_document(folder)
+                else:
+                    print(f"⚠️ 默认知识库文件夹不存在: {default_kb}")
+                    # 询问是否创建或选择其他文件夹
+                    print("\n选项:")
+                    print("  1. 创建默认知识库文件夹")
+                    print("  2. 选择其他文件夹")
+                    print("  3. 取消")
+                    choice = input("\n请选择 (1-3): ").strip()
+                    
+                    if choice == '1':
+                        default_kb.mkdir(parents=True, exist_ok=True)
+                        print(f"✅ 已创建文件夹: {default_kb}")
+                        print(f"   请将文档放入此文件夹，然后再次运行 /index")
+                    elif choice == '2':
+                        folder = self._select_folder_interactive()
+                        if folder:
+                            self.index_document(folder)
         
         elif cmd == '/reload':
             self.reload_config()
