@@ -260,6 +260,27 @@ class HybridEntityExtractor:
 
         return entities, relations
 
+    def extract_from_query(self, text: str) -> List[Dict[str, str]]:
+        """
+        从查询中提取关键词（简化格式）
+
+        Args:
+            text: 查询文本
+
+        Returns:
+            关键词字典列表
+        """
+        # 使用词典匹配提取关键词
+        keywords = []
+        found_names = set()
+
+        for term, entity_type in self.all_terms.items():
+            if term in text and term not in found_names:
+                keywords.append({"name": term, "type": entity_type})
+                found_names.add(term)
+
+        return keywords
+
     def _build_extraction_prompt(self, text: str) -> str:
         """构建实体抽取提示词"""
         return f"""请从以下文本中抽取实体和关系。
