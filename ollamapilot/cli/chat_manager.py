@@ -138,11 +138,9 @@ class OllamaPilotChat:
         try:
             print("\n🔄 正在初始化模型...")
             
-            # 使用Ollama锁保护模型初始化
-            with OllamaLockContext(owner="init_chat_model", timeout=60):
-                self.current_model = init_ollama_model(chat_model, temperature=self.temperature)
-                self.current_model_name = chat_model
-                print(f"✅ 对话模型初始化完成: {chat_model}")
+            self.current_model = init_ollama_model(chat_model, temperature=self.temperature)
+            self.current_model_name = chat_model
+            print(f"✅ 对话模型初始化完成: {chat_model}")
             
             self.current_embedding_model = embedding_model
             
