@@ -10,31 +10,32 @@ from pathlib import Path
 
 from skills.graphrag.services import (
     GraphRAGService,
-    OntologyGenerator,
-    LightweightEntityExtractor,
+    HybridEntityExtractor,
     Entity
 )
+from skills.graphrag.llm_client import SimpleLLMClient
 from skills.graphrag.utils import DocumentProcessor
 
 
 # 全局服务实例（由 Agent 初始化时注入）
 _graph_service: Optional[GraphRAGService] = None
-_ontology_generator: Optional[OntologyGenerator] = None
-_entity_extractor: Optional[LightweightEntityExtractor] = None
+_entity_extractor: Optional[HybridEntityExtractor] = None
+_llm_client: Optional[SimpleLLMClient] = None
+_use_llm: bool = False
 _knowledge_base_dir: str = "./knowledge_base"
 
 
 def init_graphrag_services(
     service: GraphRAGService,
-    ont_gen: Optional[OntologyGenerator] = None,
-    ext: Optional[LightweightEntityExtractor] = None,
+    ext: Optional[HybridEntityExtractor] = None,
     kb_dir: str = "./knowledge_base"
 ):
     """初始化服务"""
-    global _graph_service, _ontology_generator, _entity_extractor, _knowledge_base_dir
+    global _graph_service, _entity_extractor, _llm_client, _use_llm, _knowledge_base_dir
     _graph_service = service
-    _ontology_generator = ont_gen
-    _entity_extractor = ext or LightweightEntityExtractor()
+    _entity_extractor = ext or HybridEntityExtractor(persist_dir=service.persist_dir)
+    _llm_client = SimpleLLMClient()
+    _use_llm = _llm_client.is_available()
     _knowledge_base_dir = kb_dir
 
 
@@ -117,10 +118,16 @@ def upload_document(
         # 处理每个块
         print(f"🔄 正在处理 {len(chunks)} 个块...")
         total_entities = 0
+        total_relations = 0
         for i, chunk in enumerate(chunks):
             try:
-                # 抽取实体
-                entities = _entity_extractor.extract(chunk)
+                # 使用混合模式抽取实体和关系
+                entities, relations = _entity_extractor.extract(
+                    chunk,
+                    use_llm=_use_llm,
+                    llm_client=_llm_client,
+                    top_k=20
+                )
 
                 # 转换为 Entity 对象
                 entity_objects = [
@@ -143,6 +150,7 @@ def upload_document(
                 )
 
                 total_entities += len(entities)
+                total_relations += len(relations)
 
                 if (i + 1) % 10 == 0:
                     print(f"  已处理 {i + 1}/{len(chunks)} 块...")
@@ -217,9 +225,15 @@ def add_text(
 
         # 处理每个块
         total_entities = 0
+        total_relations = 0
         for i, chunk in enumerate(chunks):
-            # 抽取实体
-            entities = _entity_extractor.extract(chunk)
+            # 使用混合模式抽取实体和关系
+            entities, relations = _entity_extractor.extract(
+                chunk,
+                use_llm=_use_llm,
+                llm_client=_llm_client,
+                top_k=20
+            )
 
             # 转换为 Entity 对象
             entity_objects = [
@@ -241,12 +255,14 @@ def add_text(
             )
 
             total_entities += len(entities)
+            total_relations += len(relations)
 
         stats = _graph_service.get_stats()
         return f"""✅ 文本处理完成！
 - 来源：{source}
 - 分块数：{len(chunks)}
 - 新抽取实体：{total_entities}
+- 新抽取关系：{total_relations}
 - 图谱总实体数：{stats['total_entities']}
 - 图谱总关系数：{stats['total_relations']}"""
 

@@ -19,10 +19,10 @@ from ollamapilot.config import get_config
 # GraphRAG Skill 内部模块
 from skills.graphrag.services import (
     GraphRAGService,
-    OntologyGenerator,
-    LightweightEntityExtractor,
+    HybridEntityExtractor,
     Entity
 )
+from skills.graphrag.llm_client import SimpleLLMClient
 from skills.graphrag.middleware import GraphRAGMiddleware
 from skills.graphrag.utils import DocumentProcessor
 
@@ -30,7 +30,6 @@ from skills.graphrag.tools import (
     upload_document,
     add_document,
     add_text,
-    generate_ontology,
     query_graph_stats,
     search_knowledge,
     list_entities,
@@ -139,14 +138,16 @@ class GraphRAGSkill(Skill):
                 persist_dir=self.persist_dir,
                 embedding_model=self.embedding_model
             )
-            self.entity_extractor = LightweightEntityExtractor()
-            self.ontology_generator = OntologyGenerator(None)  # 暂时不传入LLM
+            # 使用混合实体抽取器（支持词典+LLM）
+            self.entity_extractor = HybridEntityExtractor(persist_dir=self.persist_dir)
+            # 初始化LLM客户端
+            self.llm_client = SimpleLLMClient()
+            self.use_llm = self.llm_client.is_available()
             self.document_processor = DocumentProcessor()
 
             # 初始化工具服务（供tools.py使用）
             init_graphrag_services(
                 self.graph_service,
-                self.ontology_generator,
                 self.entity_extractor
             )
 

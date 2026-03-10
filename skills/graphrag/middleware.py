@@ -8,7 +8,7 @@ from typing import Dict, Any, List, Optional
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import SystemMessage, HumanMessage
 
-from skills.graphrag.services import GraphRAGService, LightweightEntityExtractor
+from skills.graphrag.services import GraphRAGService, HybridEntityExtractor
 
 
 class GraphRAGMiddleware(AgentMiddleware):
@@ -25,7 +25,7 @@ class GraphRAGMiddleware(AgentMiddleware):
     def __init__(
         self,
         graph_service: GraphRAGService,
-        entity_extractor: LightweightEntityExtractor,
+        entity_extractor: HybridEntityExtractor,
         n_results: int = 5,
         max_hops: int = 2,
         min_relevance_score: float = 0.3,
