@@ -57,6 +57,8 @@ class GraphRAGMiddleware(AgentMiddleware):
     def before_model(self, state: Dict[str, Any], runtime: Any) -> Optional[Dict[str, Any]]:
         """
         在模型调用前执行检索
+        
+        注意：默认不自动检索，只在用户明确要求时使用知识库
 
         Args:
             state: 当前状态，包含 messages 等
@@ -69,14 +71,6 @@ class GraphRAGMiddleware(AgentMiddleware):
         if not messages:
             return None
 
-        # 检查当前激活的 Skill 是否是 graphrag
-        # 如果不是，跳过知识库检索
-        active_skill = state.get("active_skill", "")
-        if active_skill and active_skill != "graphrag":
-            if self.verbose:
-                print(f"📝 当前 Skill 是 {active_skill}，跳过知识库检索")
-            return None
-
         # 获取最后一条用户消息
         last_message = messages[-1]
         if not isinstance(last_message, HumanMessage):
@@ -84,29 +78,26 @@ class GraphRAGMiddleware(AgentMiddleware):
 
         query = str(last_message.content)
 
-        # 检查是否是知识库相关问题
-        # 如果查询太短或不包含知识库相关关键词，跳过检索
-        if len(query) < 5:
-            if self.verbose:
-                print("📝 查询太短，跳过知识库检索")
+        # 检查是否明确要求使用知识库
+        # 只有在查询中包含特定关键词时才启用知识库检索
+        kg_keywords = ['根据知识库', '查一下知识库', '知识库中', '文档中', '伤寒论', '金匮要略', '搜索文档']
+        use_knowledge_base = any(kw in query for kw in kg_keywords)
+        
+        if not use_knowledge_base:
+            # 默认不使用知识库，让模型自行处理
             return None
 
-        # 检查是否是闲聊/通用问题
-        chat_keywords = ['你好', '你是谁', '你能做什么', '谢谢', '再见', '请', '能否', '可以', '通俗', '解释一下', '什么意思']
-        is_chat = any(kw in query for kw in chat_keywords)
-        if is_chat and len(query) < 20:
-            if self.verbose:
-                print("📝 闲聊问题，跳过知识库检索")
-            return None
+        if self.verbose:
+            print(f"📚 检测到知识库查询请求，开始检索...")
 
         # 步骤 1: 从查询中提取实体
         query_entities = self.entity_extractor.extract_from_query(query)
 
         if not query_entities:
-            # 没有提取到实体，不回退检索，直接让模型处理
             if self.verbose:
-                print("📝 未提取到实体，跳过知识库检索")
-            return None
+                print("📝 未提取到实体，尝试向量检索")
+            # 尝试向量检索作为回退
+            return self._fallback_vector_search(state, query)
 
         if self.verbose:
             entity_names = [e["name"] for e in query_entities]

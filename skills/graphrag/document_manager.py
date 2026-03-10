@@ -16,6 +16,9 @@ import threading
 from dataclasses import dataclass
 from enum import Enum
 
+# Ollama 并发锁 - 防止生成模型和向量模型同时调用
+_ollama_lock = threading.Lock()
+
 
 class IndexingStatus(Enum):
     """索引状态"""
@@ -236,7 +239,10 @@ class DocumentManager:
                 del self._indexing_tasks[doc_id]
     
     def _do_index_document(self, doc_id: str, progress_callback: Callable[[float, str], None]):
-        """执行文档索引（实际工作）"""
+        """执行文档索引（实际工作）
+        
+        使用Ollama锁防止与生成模型并发冲突
+        """
         from skills.graphrag.utils import DocumentProcessor
         from skills.graphrag.services import GraphRAGService, LightweightEntityExtractor
         from skills.graphrag.knowledge_base import KnowledgeBaseManager
@@ -247,13 +253,18 @@ class DocumentManager:
         storage_path = self._get_document_storage_path(doc_info.name, doc_info.model_name)
         storage_path.mkdir(parents=True, exist_ok=True)
         
-        progress_callback(0.1, "初始化服务...")
+        progress_callback(0.1, "等待Ollama资源...")
         
-        # 初始化服务
-        graph_service = GraphRAGService(
-            persist_dir=str(storage_path),
-            embedding_model=doc_info.model_name
-        )
+        # 获取Ollama锁，防止与生成模型并发
+        global _ollama_lock
+        with _ollama_lock:
+            progress_callback(0.15, "初始化服务...")
+            
+            # 初始化服务
+            graph_service = GraphRAGService(
+                persist_dir=str(storage_path),
+                embedding_model=doc_info.model_name
+            )
         
         entity_extractor = LightweightEntityExtractor()
         doc_processor = DocumentProcessor()
@@ -283,7 +294,7 @@ class DocumentManager:
             entities = entity_extractor.extract(chunk)
             total_entities += len(entities)
             
-            # 添加到图谱
+            # 添加到图谱（使用锁保护）
             chunk_doc_id = f"{doc_id}_{i}"
             from skills.graphrag.services import Entity
             entity_objects = [
@@ -291,20 +302,22 @@ class DocumentManager:
                 for e in entities
             ]
             
-            graph_service.add_document(
-                text=chunk,
-                doc_id=chunk_doc_id,
-                metadata={
-                    "source": doc_info.file_path,
-                    "chunk_index": i,
-                    "total_chunks": len(chunks)
-                },
-                entities=entity_objects
-            )
-            
-            # 每5块保存一次
-            if (i + 1) % 5 == 0:
-                graph_service._save_index()
+            # 获取Ollama锁，防止与生成模型并发
+            with _ollama_lock:
+                graph_service.add_document(
+                    text=chunk,
+                    doc_id=chunk_doc_id,
+                    metadata={
+                        "source": doc_info.file_path,
+                        "chunk_index": i,
+                        "total_chunks": len(chunks)
+                    },
+                    entities=entity_objects
+                )
+                
+                # 每5块保存一次
+                if (i + 1) % 5 == 0:
+                    graph_service._save_index()
         
         doc_info.entities_count = total_entities
         progress_callback(1.0, "索引完成")
