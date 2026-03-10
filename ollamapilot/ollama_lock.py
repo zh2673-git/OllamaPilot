@@ -7,11 +7,14 @@ Ollama 并发锁模块
 import threading
 import time
 from typing import Optional
+import logging
 
-# 全局Ollama锁
-_ollama_lock = threading.RLock()
+logger = logging.getLogger(__name__)
+
+# 全局Ollama锁 - 使用普通Lock确保严格的互斥
+_ollama_lock = threading.Lock()
 _lock_owner: Optional[str] = None
-_lock_count = 0
+_lock_acquired_time: Optional[float] = None
 
 
 def acquire_ollama_lock(owner: str = "unknown", timeout: float = 60.0) -> bool:
@@ -25,38 +28,47 @@ def acquire_ollama_lock(owner: str = "unknown", timeout: float = 60.0) -> bool:
     Returns:
         是否成功获取锁
     """
-    global _lock_owner, _lock_count
+    global _lock_owner, _lock_acquired_time
     
-    start_time = time.time()
-    while time.time() - start_time < timeout:
-        if _ollama_lock.acquire(blocking=False):
-            _lock_owner = owner
-            _lock_count += 1
-            return True
-        time.sleep(0.1)
+    logger.debug(f"[{owner}] 尝试获取Ollama锁...")
     
-    return False
+    # 使用带超时的acquire
+    acquired = _ollama_lock.acquire(timeout=timeout)
+    
+    if acquired:
+        _lock_owner = owner
+        _lock_acquired_time = time.time()
+        logger.debug(f"[{owner}] 成功获取Ollama锁")
+        return True
+    else:
+        logger.warning(f"[{owner}] 获取Ollama锁超时，当前持有者: {_lock_owner}")
+        return False
 
 
 def release_ollama_lock():
     """释放Ollama锁"""
-    global _lock_owner, _lock_count
+    global _lock_owner, _lock_acquired_time
     
     try:
         _ollama_lock.release()
-        _lock_count = max(0, _lock_count - 1)
-        if _lock_count == 0:
-            _lock_owner = None
+        logger.debug(f"[{_lock_owner}] 释放Ollama锁")
+        _lock_owner = None
+        _lock_acquired_time = None
     except RuntimeError:
         pass  # 锁未被持有
 
 
 def get_lock_status() -> dict:
     """获取锁状态"""
+    locked = _ollama_lock.locked()
+    hold_time = None
+    if locked and _lock_acquired_time:
+        hold_time = time.time() - _lock_acquired_time
+    
     return {
-        "locked": _lock_count > 0,
+        "locked": locked,
         "owner": _lock_owner,
-        "count": _lock_count
+        "hold_time": hold_time
     }
 
 

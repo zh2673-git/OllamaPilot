@@ -254,55 +254,70 @@ class DocumentManager:
         from skills.graphrag.utils import DocumentProcessor
         from skills.graphrag.services import GraphRAGService, LightweightEntityExtractor
         from skills.graphrag.knowledge_base import KnowledgeBaseManager
+        import logging
         
+        logger = logging.getLogger(__name__)
         doc_info = self.documents[doc_id]
         
         # 获取存储路径
         storage_path = self._get_document_storage_path(doc_info.name, doc_info.model_name)
         storage_path.mkdir(parents=True, exist_ok=True)
         
-        progress_callback(0.1, "等待Ollama资源...")
+        progress_callback(0.05, "准备索引...")
+        logger.info(f"[{doc_info.name}] 开始索引，文档路径: {doc_info.file_path}")
+        
+        # 初始化服务（不需要锁）
+        try:
+            progress_callback(0.1, "初始化服务...")
+            graph_service = GraphRAGService(
+                persist_dir=str(storage_path),
+                embedding_model=doc_info.model_name
+            )
+            
+            entity_extractor = LightweightEntityExtractor()
+            doc_processor = DocumentProcessor()
+            
+            progress_callback(0.15, "读取文档...")
+            
+            # 读取文档
+            text = doc_processor.read_document(doc_info.file_path)
+            if not text:
+                raise ValueError("无法读取文档内容")
+            
+            progress_callback(0.25, "分块处理...")
+            
+            # 分块
+            chunks = doc_processor.chunk_text(text)
+            doc_info.chunks_count = len(chunks)
+            
+            progress_callback(0.3, f"分块完成: {len(chunks)} 块")
+            logger.info(f"[{doc_info.name}] 文档分块完成: {len(chunks)} 块")
+            
+        except Exception as e:
+            logger.error(f"[{doc_info.name}] 初始化或分块失败: {e}")
+            progress_callback(0.0, f"准备阶段失败: {e}")
+            raise
         
         # 获取Ollama锁，防止与生成模型并发
+        # 使用较长的超时时间（10分钟），因为PDF索引可能需要很长时间
+        progress_callback(0.35, "等待Ollama资源（可能需要几分钟）...")
+        
         try:
-            with OllamaLockContext(owner=f"index_{doc_info.name}", timeout=300):
-                progress_callback(0.15, "初始化服务...")
-                
-                # 初始化服务
-                graph_service = GraphRAGService(
-                    persist_dir=str(storage_path),
-                    embedding_model=doc_info.model_name
-                )
-                
-                entity_extractor = LightweightEntityExtractor()
-                doc_processor = DocumentProcessor()
-                
-                progress_callback(0.2, "读取文档...")
-                
-                # 读取文档
-                text = doc_processor.read_document(doc_info.file_path)
-                if not text:
-                    raise ValueError("无法读取文档内容")
-                
-                progress_callback(0.3, "分块处理...")
-                
-                # 分块
-                chunks = doc_processor.chunk_text(text)
-                doc_info.chunks_count = len(chunks)
-                
-                progress_callback(0.4, f"分块完成: {len(chunks)} 块")
+            with OllamaLockContext(owner=f"index_{doc_info.name}", timeout=600):
+                progress_callback(0.4, "开始向量化和实体抽取...")
+                logger.info(f"[{doc_info.name}] 获取Ollama锁，开始处理 {len(chunks)} 个块")
                 
                 # 处理每个块
                 total_entities = 0
                 for i, chunk in enumerate(chunks):
-                    chunk_progress = 0.4 + (0.5 * (i + 1) / len(chunks))
+                    chunk_progress = 0.4 + (0.55 * (i + 1) / len(chunks))
                     progress_callback(chunk_progress, f"处理块 {i+1}/{len(chunks)}...")
                     
                     # 抽取实体
                     entities = entity_extractor.extract(chunk)
                     total_entities += len(entities)
                     
-                    # 添加到图谱（使用锁保护）
+                    # 添加到图谱
                     chunk_doc_id = f"{doc_id}_{i}"
                     from skills.graphrag.services import Entity
                     entity_objects = [
@@ -327,11 +342,14 @@ class DocumentManager:
                 
                 doc_info.entities_count = total_entities
                 progress_callback(1.0, "索引完成")
+                logger.info(f"[{doc_info.name}] 索引完成: {total_entities} 个实体")
                 
         except TimeoutError as e:
-            progress_callback(0.0, f"获取Ollama锁超时: {e}")
+            logger.error(f"[{doc_info.name}] 获取Ollama锁超时: {e}")
+            progress_callback(0.0, f"等待Ollama资源超时，请稍后重试")
             raise
         except Exception as e:
+            logger.error(f"[{doc_info.name}] 索引错误: {e}")
             progress_callback(0.0, f"索引错误: {e}")
             raise
     
