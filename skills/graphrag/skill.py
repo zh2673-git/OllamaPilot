@@ -315,7 +315,6 @@ class GraphRAGSkill(Skill):
             upload_document,  # 上传文档到知识库（推荐）
             add_document,     # 添加文档到知识图谱（不复制到知识库）
             add_text,
-            generate_ontology,
             query_graph_stats,
             search_knowledge,
             list_entities,
@@ -347,7 +346,6 @@ class GraphRAGSkill(Skill):
 5. **query_graph_stats()** - 查看图谱统计
 6. **list_entities(entity_type)** - 列出实体
 7. **get_entity_relations(entity_name)** - 查看实体关系
-8. **generate_ontology(document_text)** - 生成本体定义
 
 ## 核心规则
 
