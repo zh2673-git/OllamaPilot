@@ -110,27 +110,8 @@ class GraphRAGService:
         """获取 Embedding 函数"""
         if self.embedding_model_name:
             try:
-                import requests
-
-                # 先测试 Ollama 服务是否可用
-                print(f"🔄 测试 Embedding 模型 {self.embedding_model_name}...")
-                try:
-                    response = requests.post(
-                        "http://localhost:11434/api/embeddings",
-                        json={"model": self.embedding_model_name, "prompt": "test"},
-                        timeout=60
-                    )
-                    if response.status_code == 200:
-                        print(f"✅ Embedding 模型 {self.embedding_model_name} 已就绪")
-                    else:
-                        print(f"⚠️ Embedding 模型测试失败: {response.status_code}")
-                except requests.exceptions.Timeout:
-                    print(f"⚠️ Embedding 模型加载超时（60秒），模型可能太大或 Ollama 服务繁忙")
-                    print(f"   建议：手动运行 'ollama run {self.embedding_model_name}' 预热模型")
-                except Exception as e:
-                    print(f"⚠️ Embedding 模型测试失败: {e}")
-
                 # 使用自定义的 Embedding 函数
+                # 不再每次测试模型，让实际调用时处理错误
                 embedding_fn = OllamaEmbeddingFunction(
                     url="http://localhost:11434/api/embeddings",
                     model_name=self.embedding_model_name,
@@ -146,7 +127,6 @@ class GraphRAGService:
                 return HashEmbeddingFunction(dim=384)
         else:
             # 没有指定 embedding 模型，使用简单 embedding
-            print("⚠️ 未指定 Embedding 模型，使用简单哈希 embedding（语义检索能力受限）")
             return HashEmbeddingFunction(dim=384)
 
     def set_ontology(self, ontology: Dict):

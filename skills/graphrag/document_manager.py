@@ -16,8 +16,6 @@ import threading
 from dataclasses import dataclass
 from enum import Enum
 
-from ollamapilot.ollama_lock import OllamaLockContext
-
 
 class IndexingStatus(Enum):
     """索引状态"""
@@ -247,10 +245,7 @@ class DocumentManager:
                 del self._indexing_tasks[doc_id]
     
     def _do_index_document(self, doc_id: str, progress_callback: Callable[[float, str], None]):
-        """执行文档索引（实际工作）
-        
-        使用Ollama锁防止与生成模型并发冲突
-        """
+        """执行文档索引（实际工作）"""
         from skills.graphrag.utils import DocumentProcessor
         from skills.graphrag.services import GraphRAGService, LightweightEntityExtractor
         from skills.graphrag.knowledge_base import KnowledgeBaseManager
@@ -266,7 +261,6 @@ class DocumentManager:
         progress_callback(0.05, "准备索引...")
         logger.info(f"[{doc_info.name}] 开始索引，文档路径: {doc_info.file_path}")
         
-        # 初始化服务（不需要锁）
         try:
             progress_callback(0.1, "初始化服务...")
             graph_service = GraphRAGService(
@@ -293,61 +287,46 @@ class DocumentManager:
             progress_callback(0.3, f"分块完成: {len(chunks)} 块")
             logger.info(f"[{doc_info.name}] 文档分块完成: {len(chunks)} 块")
             
-        except Exception as e:
-            logger.error(f"[{doc_info.name}] 初始化或分块失败: {e}")
-            progress_callback(0.0, f"准备阶段失败: {e}")
-            raise
-        
-        # 获取Ollama锁，防止与生成模型并发
-        # 使用较长的超时时间（10分钟），因为PDF索引可能需要很长时间
-        progress_callback(0.35, "等待Ollama资源（可能需要几分钟）...")
-        
-        try:
-            with OllamaLockContext(owner=f"index_{doc_info.name}", timeout=600):
-                progress_callback(0.4, "开始向量化和实体抽取...")
-                logger.info(f"[{doc_info.name}] 获取Ollama锁，开始处理 {len(chunks)} 个块")
+            # 处理每个块
+            progress_callback(0.35, "开始向量化和实体抽取...")
+            logger.info(f"[{doc_info.name}] 开始处理 {len(chunks)} 个块")
+            
+            total_entities = 0
+            for i, chunk in enumerate(chunks):
+                chunk_progress = 0.35 + (0.6 * (i + 1) / len(chunks))
+                progress_callback(chunk_progress, f"处理块 {i+1}/{len(chunks)}...")
                 
-                # 处理每个块
-                total_entities = 0
-                for i, chunk in enumerate(chunks):
-                    chunk_progress = 0.4 + (0.55 * (i + 1) / len(chunks))
-                    progress_callback(chunk_progress, f"处理块 {i+1}/{len(chunks)}...")
-                    
-                    # 抽取实体
-                    entities = entity_extractor.extract(chunk)
-                    total_entities += len(entities)
-                    
-                    # 添加到图谱
-                    chunk_doc_id = f"{doc_id}_{i}"
-                    from skills.graphrag.services import Entity
-                    entity_objects = [
-                        Entity(name=e.name, type=e.type, positions=[(e.start, e.end)])
-                        for e in entities
-                    ]
-                    
-                    graph_service.add_document(
-                        text=chunk,
-                        doc_id=chunk_doc_id,
-                        metadata={
-                            "source": doc_info.file_path,
-                            "chunk_index": i,
-                            "total_chunks": len(chunks)
-                        },
-                        entities=entity_objects
-                    )
-                    
-                    # 每5块保存一次
-                    if (i + 1) % 5 == 0:
-                        graph_service._save_index()
+                # 抽取实体
+                entities = entity_extractor.extract(chunk)
+                total_entities += len(entities)
                 
-                doc_info.entities_count = total_entities
-                progress_callback(1.0, "索引完成")
-                logger.info(f"[{doc_info.name}] 索引完成: {total_entities} 个实体")
+                # 添加到图谱
+                chunk_doc_id = f"{doc_id}_{i}"
+                from skills.graphrag.services import Entity
+                entity_objects = [
+                    Entity(name=e.name, type=e.type, positions=[(e.start, e.end)])
+                    for e in entities
+                ]
                 
-        except TimeoutError as e:
-            logger.error(f"[{doc_info.name}] 获取Ollama锁超时: {e}")
-            progress_callback(0.0, f"等待Ollama资源超时，请稍后重试")
-            raise
+                graph_service.add_document(
+                    text=chunk,
+                    doc_id=chunk_doc_id,
+                    metadata={
+                        "source": doc_info.file_path,
+                        "chunk_index": i,
+                        "total_chunks": len(chunks)
+                    },
+                    entities=entity_objects
+                )
+                
+                # 每5块保存一次
+                if (i + 1) % 5 == 0:
+                    graph_service._save_index()
+            
+            doc_info.entities_count = total_entities
+            progress_callback(1.0, "索引完成")
+            logger.info(f"[{doc_info.name}] 索引完成: {total_entities} 个实体")
+                
         except Exception as e:
             logger.error(f"[{doc_info.name}] 索引错误: {e}")
             progress_callback(0.0, f"索引错误: {e}")

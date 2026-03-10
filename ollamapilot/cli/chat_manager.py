@@ -26,7 +26,6 @@ from ollamapilot import (
 )
 from ollamapilot.agent import OllamaPilotAgent
 from ollamapilot.config import get_config, reload_config
-from ollamapilot.ollama_lock import OllamaLockContext
 
 from .session import Session
 from .completer import CommandCompleter, HAS_READLINE
@@ -721,49 +720,41 @@ class OllamaPilotChat:
         has_output = False
         
         try:
-            # 使用Ollama锁保护对话调用
-            # 使用较长的超时时间（5分钟），因为索引可能正在进行
-            with OllamaLockContext(owner="chat", timeout=300):
-                for chunk in self.agent.stream(user_input, thread_id=self.current_session_id):
-                    if isinstance(chunk, dict):
-                        content = None
-                        if "messages" in chunk:
-                            messages = chunk["messages"]
-                            if messages and hasattr(messages[-1], "content"):
-                                content = messages[-1].content
-                        elif "content" in chunk:
-                            content = chunk["content"]
-                        elif "agent" in chunk and "messages" in chunk["agent"]:
-                            messages = chunk["agent"]["messages"]
-                            if messages and hasattr(messages[-1], "content"):
-                                content = messages[-1].content
-                        
-                        if content and len(content) > len(full_response):
-                            new_text = content[len(full_response):]
-                            if new_text.strip():
-                                print(new_text, end="", flush=True)
-                                has_output = True
-                            full_response = content
+            for chunk in self.agent.stream(user_input, thread_id=self.current_session_id):
+                if isinstance(chunk, dict):
+                    content = None
+                    if "messages" in chunk:
+                        messages = chunk["messages"]
+                        if messages and hasattr(messages[-1], "content"):
+                            content = messages[-1].content
+                    elif "content" in chunk:
+                        content = chunk["content"]
+                    elif "agent" in chunk and "messages" in chunk["agent"]:
+                        messages = chunk["agent"]["messages"]
+                        if messages and hasattr(messages[-1], "content"):
+                            content = messages[-1].content
+                    
+                    if content and len(content) > len(full_response):
+                        new_text = content[len(full_response):]
+                        if new_text.strip():
+                            print(new_text, end="", flush=True)
+                            has_output = True
+                        full_response = content
             
             if has_output:
                 print("\n")
             else:
                 print("\n⏳ 生成回答中...")
-                with OllamaLockContext(owner="chat_fallback", timeout=300):
-                    response = self.agent.invoke(user_input, thread_id=self.current_session_id)
+                response = self.agent.invoke(user_input, thread_id=self.current_session_id)
                 if response:
                     print(f"{response}\n")
                 else:
                     print("（无回答）\n")
                     
-        except TimeoutError:
-            print("\n⏳ 当前正在索引文档，请稍后再试...")
-            print("   使用 /docs 查看索引进度\n")
         except Exception as e:
             print(f"\n⚠️ 流式输出失败，使用普通模式: {e}\n")
             try:
-                with OllamaLockContext(owner="chat_error", timeout=300):
-                    response = self.agent.invoke(user_input, thread_id=self.current_session_id)
+                response = self.agent.invoke(user_input, thread_id=self.current_session_id)
                 if response:
                     print(f"助手: {response}\n")
             except Exception as e2:
