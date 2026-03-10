@@ -69,6 +69,14 @@ class GraphRAGMiddleware(AgentMiddleware):
         if not messages:
             return None
 
+        # 检查当前激活的 Skill 是否是 graphrag
+        # 如果不是，跳过知识库检索
+        active_skill = state.get("active_skill", "")
+        if active_skill and active_skill != "graphrag":
+            if self.verbose:
+                print(f"📝 当前 Skill 是 {active_skill}，跳过知识库检索")
+            return None
+
         # 获取最后一条用户消息
         last_message = messages[-1]
         if not isinstance(last_message, HumanMessage):

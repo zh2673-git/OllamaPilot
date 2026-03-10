@@ -166,6 +166,9 @@ class SkillSelectorMiddleware(AgentMiddleware):
             # if self.verbose:
             #     print(f"🎯 激活 Skill: {skill.name}")
 
+            # 记录当前激活的 Skill
+            self._active_skill = skill.name
+
             system_prompt = skill.get_system_prompt()
             if system_prompt:
                 # 检查是否已存在系统消息
@@ -177,8 +180,14 @@ class SkillSelectorMiddleware(AgentMiddleware):
 
                 if not has_system:
                     return {
-                        "messages": [SystemMessage(content=system_prompt)] + messages
+                        "messages": [SystemMessage(content=system_prompt)] + messages,
+                        "active_skill": skill.name
                     }
+                else:
+                    # 已有系统消息，只更新 active_skill
+                    return {"active_skill": skill.name}
+        else:
+            self._active_skill = None
 
         return None
 
