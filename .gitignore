@@ -154,3 +154,6 @@ Thumbs.db
 # Knowledge base and data directories
 knowledge_base/
 data/
+
+# Notes and documentation
+笔记/

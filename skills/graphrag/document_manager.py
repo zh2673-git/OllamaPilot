@@ -296,26 +296,30 @@ class DocumentManager:
                 chunk_progress = 0.35 + (0.6 * (i + 1) / len(chunks))
                 progress_callback(chunk_progress, f"处理块 {i+1}/{len(chunks)}...")
                 
-                # 抽取实体
-                entities = entity_extractor.extract(chunk)
-                total_entities += len(entities)
+                # 抽取关键词
+                keywords = entity_extractor.extract(chunk, top_k=10)
+                total_entities += len(keywords)
                 
                 # 添加到图谱
                 chunk_doc_id = f"{doc_id}_{i}"
                 from skills.graphrag.services import Entity
                 entity_objects = [
-                    Entity(name=e.name, type=e.type, positions=[(e.start, e.end)])
-                    for e in entities
+                    Entity(name=k.name, type=k.type, positions=[(k.start, k.end)])
+                    for k in keywords
                 ]
+                
+                # 将关键词添加到metadata中用于检索
+                metadata = {
+                    "source": doc_info.file_path,
+                    "chunk_index": i,
+                    "total_chunks": len(chunks),
+                    "keywords": ",".join([k.name for k in keywords[:5]])  # 前5个关键词
+                }
                 
                 graph_service.add_document(
                     text=chunk,
                     doc_id=chunk_doc_id,
-                    metadata={
-                        "source": doc_info.file_path,
-                        "chunk_index": i,
-                        "total_chunks": len(chunks)
-                    },
+                    metadata=metadata,
                     entities=entity_objects
                 )
                 
