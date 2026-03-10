@@ -23,20 +23,23 @@ _entity_extractor: Optional[HybridEntityExtractor] = None
 _llm_client: Optional[SimpleLLMClient] = None
 _use_llm: bool = False
 _knowledge_base_dir: str = "./knowledge_base"
+_document_manager: Optional[Any] = None  # DocumentManager 实例
 
 
 def init_graphrag_services(
     service: GraphRAGService,
     ext: Optional[HybridEntityExtractor] = None,
-    kb_dir: str = "./knowledge_base"
+    kb_dir: str = "./knowledge_base",
+    doc_manager: Optional[Any] = None
 ):
     """初始化服务"""
-    global _graph_service, _entity_extractor, _llm_client, _use_llm, _knowledge_base_dir
+    global _graph_service, _entity_extractor, _llm_client, _use_llm, _knowledge_base_dir, _document_manager
     _graph_service = service
     _entity_extractor = ext or HybridEntityExtractor(persist_dir=service.persist_dir)
     _llm_client = SimpleLLMClient()
     _use_llm = _llm_client.is_available()
     _knowledge_base_dir = kb_dir
+    _document_manager = doc_manager
 
 
 def get_graph_service() -> Optional[GraphRAGService]:
@@ -315,17 +318,34 @@ def query_graph_stats() -> str:
     Returns:
         统计信息
     """
-    if not _graph_service:
-        return "❌ 服务未初始化"
+    try:
+        # 优先使用 DocumentManager 获取全局统计
+        if _document_manager:
+            stats = _document_manager.get_global_stats()
+            entity_types = ', '.join(stats['entity_types']) if stats['entity_types'] else '无'
 
-    stats = _graph_service.get_stats()
-    entity_types = ', '.join(stats['entity_types']) if stats['entity_types'] else '无'
-
-    return f"""📊 知识图谱统计：
+            return f"""📊 知识图谱统计（所有文档）：
 - 文档数：{stats['total_documents']}
 - 实体数：{stats['total_entities']}
 - 关系数：{stats['total_relations']}
 - 实体类型：{entity_types}"""
+
+        # 回退到全局 GraphRAGService
+        elif _graph_service:
+            stats = _graph_service.get_stats()
+            entity_types = ', '.join(stats['entity_types']) if stats['entity_types'] else '无'
+
+            return f"""📊 知识图谱统计：
+- 文档数：{stats['total_documents']}
+- 实体数：{stats['total_entities']}
+- 关系数：{stats['total_relations']}
+- 实体类型：{entity_types}"""
+
+        else:
+            return "❌ 服务未初始化"
+
+    except Exception as e:
+        return f"❌ 获取统计信息失败：{str(e)}"
 
 
 @tool
@@ -343,58 +363,89 @@ def search_knowledge(
     Returns:
         搜索结果
     """
-    if not _graph_service or not _entity_extractor:
+    if not _entity_extractor:
         return "❌ 服务未初始化"
 
     try:
         # 提取查询实体
         query_entities = _entity_extractor.extract_from_query(query)
 
-        if query_entities:
-            # 实体增强检索
-            results = _graph_service.enhanced_search(
-                query=query,
-                query_entities=query_entities,
-                n_results=n_results
-            )
+        # 优先使用 DocumentManager 搜索所有文档
+        if _document_manager:
+            results = _document_manager.search_all_documents(query, n_results=n_results)
 
-            entity_info = f"提取到实体: {', '.join([e['name'] for e in query_entities])}"
+            if query_entities:
+                entity_info = f"提取到实体: {', '.join([e['name'] for e in query_entities])}"
+            else:
+                entity_info = "未提取到实体，使用向量检索"
+
+            if not results:
+                return f"🔍 未找到相关文档\n{entity_info}"
+
+            # 格式化结果
+            output = [f"🔍 搜索结果 ({len(results)} 条)",
+                      f"{entity_info}",
+                      "=" * 50]
+
+            # 显示文档
+            output.append("\n【相关文档】")
+            for i, doc in enumerate(results, 1):
+                source = doc.get("document_name", "未知")
+                score = doc.get("score", 0)
+                content = doc.get("content", "")[:300]
+
+                output.append(f"\n[{i}] 来源: {source} | 相关度: {score:.2f}")
+                output.append(f"    {content}...")
+
+            return "\n".join(output)
+
+        # 回退到全局 GraphRAGService 搜索
+        elif _graph_service:
+            if query_entities:
+                results = _graph_service.enhanced_search(
+                    query=query,
+                    query_entities=query_entities,
+                    n_results=n_results
+                )
+                entity_info = f"提取到实体: {', '.join([e['name'] for e in query_entities])}"
+            else:
+                results = {
+                    "documents": _graph_service.vector_search(query, n_results=n_results),
+                    "query_entities": [],
+                    "relations": [],
+                    "related_entities": []
+                }
+                entity_info = "未提取到实体，使用向量检索"
+
+            if not results["documents"]:
+                return f"🔍 未找到相关文档\n{entity_info}"
+
+            # 格式化结果
+            output = [f"🔍 搜索结果 ({len(results['documents'])} 条)",
+                      f"{entity_info}",
+                      "=" * 50]
+
+            # 显示关系
+            if results.get("relations"):
+                output.append("\n【相关关系】")
+                for rel in results["relations"][:3]:
+                    output.append(f"- {rel['source']} --{rel['relation']}--> {rel['target']}")
+
+            # 显示文档
+            output.append("\n【相关文档】")
+            for i, doc in enumerate(results["documents"], 1):
+                metadata = doc.get("metadata", {})
+                source = metadata.get("source", "未知")
+                score = doc.get("score", 0)
+                content = doc.get("content", "")[:300]
+
+                output.append(f"\n[{i}] 来源: {source} | 相关度: {score:.2f}")
+                output.append(f"    {content}...")
+
+            return "\n".join(output)
+
         else:
-            # 纯向量检索
-            results = {
-                "documents": _graph_service.vector_search(query, n_results=n_results),
-                "query_entities": [],
-                "relations": [],
-                "related_entities": []
-            }
-            entity_info = "未提取到实体，使用向量检索"
-
-        if not results["documents"]:
-            return f"🔍 未找到相关文档\n{entity_info}"
-
-        # 格式化结果
-        output = [f"🔍 搜索结果 ({len(results['documents'])} 条)",
-                  f"{entity_info}",
-                  "=" * 50]
-
-        # 显示关系
-        if results.get("relations"):
-            output.append("\n【相关关系】")
-            for rel in results["relations"][:3]:
-                output.append(f"- {rel['source']} --{rel['relation']}--> {rel['target']}")
-
-        # 显示文档
-        output.append("\n【相关文档】")
-        for i, doc in enumerate(results["documents"], 1):
-            metadata = doc.get("metadata", {})
-            source = metadata.get("source", "未知")
-            score = doc.get("score", 0)
-            content = doc.get("content", "")[:300]
-
-            output.append(f"\n[{i}] 来源: {source} | 相关度: {score:.2f}")
-            output.append(f"    {content}...")
-
-        return "\n".join(output)
+            return "❌ 搜索服务未初始化"
 
     except Exception as e:
         return f"❌ 搜索失败：{str(e)}"

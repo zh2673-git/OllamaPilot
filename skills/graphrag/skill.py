@@ -145,10 +145,18 @@ class GraphRAGSkill(Skill):
             self.use_llm = self.llm_client.is_available()
             self.document_processor = DocumentProcessor()
 
+            # 创建 DocumentManager 实例（用于管理所有文档）
+            from skills.graphrag.document_manager import DocumentManager
+            self.document_manager = DocumentManager(
+                base_persist_dir=self.persist_dir,
+                embedding_model=self.embedding_model
+            )
+
             # 初始化工具服务（供tools.py使用）
             init_graphrag_services(
                 self.graph_service,
-                self.entity_extractor
+                self.entity_extractor,
+                doc_manager=self.document_manager
             )
 
             # 创建中间件（如果启用自动检索）

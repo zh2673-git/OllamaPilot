@@ -489,3 +489,92 @@ class DocumentManager:
         
         print(f"✅ 已恢复 {len(resumed)}/{len(failed_docs)} 个任务")
         return resumed
+
+    def search_all_documents(self, query: str, n_results: int = 5) -> List[Dict[str, Any]]:
+        """
+        搜索所有已索引的文档
+
+        Args:
+            query: 查询文本
+            n_results: 每个文档返回的结果数量
+
+        Returns:
+            合并的搜索结果列表
+        """
+        from skills.graphrag.services import GraphRAGService
+
+        all_results = []
+
+        # 遍历所有已完成的文档
+        for doc_id, doc_info in self.documents.items():
+            if doc_info.status != IndexingStatus.COMPLETED:
+                continue
+
+            try:
+                # 获取文档的存储路径
+                storage_path = self._get_document_storage_path(doc_info.name, doc_info.model_name)
+
+                # 创建临时的 GraphRAGService 来搜索该文档
+                graph_service = GraphRAGService(
+                    persist_dir=str(storage_path),
+                    embedding_model=doc_info.model_name or self.embedding_model
+                )
+
+                # 执行向量搜索
+                results = graph_service.vector_search(query, n_results=n_results)
+
+                # 添加文档信息到结果
+                for result in results:
+                    result['document_name'] = doc_info.name
+                    result['document_id'] = doc_id
+
+                all_results.extend(results)
+
+            except Exception as e:
+                print(f"⚠️ 搜索文档 {doc_info.name} 失败: {e}")
+                continue
+
+        # 按相似度排序并返回前 n_results 个
+        all_results.sort(key=lambda x: x.get('score', 0), reverse=True)
+        return all_results[:n_results]
+
+    def get_global_stats(self) -> Dict[str, Any]:
+        """
+        获取所有文档的全局统计信息
+
+        Returns:
+            全局统计信息
+        """
+        from skills.graphrag.services import GraphRAGService
+
+        total_documents = 0
+        total_entities = 0
+        total_relations = 0
+        entity_types = set()
+
+        for doc_id, doc_info in self.documents.items():
+            if doc_info.status != IndexingStatus.COMPLETED:
+                continue
+
+            try:
+                storage_path = self._get_document_storage_path(doc_info.name, doc_info.model_name)
+                graph_service = GraphRAGService(
+                    persist_dir=str(storage_path),
+                    embedding_model=doc_info.model_name or self.embedding_model
+                )
+
+                stats = graph_service.get_stats()
+                total_documents += stats['total_documents']
+                total_entities += stats['total_entities']
+                total_relations += stats['total_relations']
+                entity_types.update(stats['entity_types'])
+
+            except Exception as e:
+                continue
+
+        return {
+            "total_documents": total_documents,
+            "total_entities": total_entities,
+            "total_relations": total_relations,
+            "entity_types": list(entity_types)
+        }
