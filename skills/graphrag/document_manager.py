@@ -247,58 +247,77 @@ class DocumentManager:
     def _do_index_document(self, doc_id: str, progress_callback: Callable[[float, str], None]):
         """执行文档索引（实际工作）"""
         from skills.graphrag.utils import DocumentProcessor
-        from skills.graphrag.services import GraphRAGService, LightweightEntityExtractor
+        from skills.graphrag.services import GraphRAGService, HybridEntityExtractor
+        from skills.graphrag.llm_client import SimpleLLMClient
         from skills.graphrag.knowledge_base import KnowledgeBaseManager
         import logging
-        
+
         logger = logging.getLogger(__name__)
         doc_info = self.documents[doc_id]
-        
+
         # 获取存储路径
         storage_path = self._get_document_storage_path(doc_info.name, doc_info.model_name)
         storage_path.mkdir(parents=True, exist_ok=True)
-        
+
         progress_callback(0.05, "准备索引...")
         logger.info(f"[{doc_info.name}] 开始索引，文档路径: {doc_info.file_path}")
-        
+
         try:
             progress_callback(0.1, "初始化服务...")
             graph_service = GraphRAGService(
                 persist_dir=str(storage_path),
                 embedding_model=doc_info.model_name
             )
-            
-            entity_extractor = LightweightEntityExtractor()
+
+            # 初始化混合实体抽取器（自动加载已有词典）
+            entity_extractor = HybridEntityExtractor(persist_dir=str(storage_path))
+
+            # 初始化LLM客户端（用于动态学习）
+            llm_client = SimpleLLMClient(model_name="qwen3.5:4b")
+            use_llm = llm_client.is_available()
+            if use_llm:
+                logger.info(f"[{doc_info.name}] LLM服务可用，将使用混合模式抽取")
+            else:
+                logger.info(f"[{doc_info.name}] LLM服务不可用，仅使用词典匹配")
+
             doc_processor = DocumentProcessor()
-            
+
             progress_callback(0.15, "读取文档...")
-            
+
             # 读取文档
             text = doc_processor.read_document(doc_info.file_path)
             if not text:
                 raise ValueError("无法读取文档内容")
-            
+
             progress_callback(0.25, "分块处理...")
-            
+
             # 分块
             chunks = doc_processor.chunk_text(text)
             doc_info.chunks_count = len(chunks)
-            
+
             progress_callback(0.3, f"分块完成: {len(chunks)} 块")
             logger.info(f"[{doc_info.name}] 文档分块完成: {len(chunks)} 块")
-            
+
             # 处理每个块
             progress_callback(0.35, "开始向量化和实体抽取...")
             logger.info(f"[{doc_info.name}] 开始处理 {len(chunks)} 个块")
-            
+
             total_entities = 0
+            total_relations = 0
+
             for i, chunk in enumerate(chunks):
                 chunk_progress = 0.35 + (0.6 * (i + 1) / len(chunks))
                 progress_callback(chunk_progress, f"处理块 {i+1}/{len(chunks)}...")
 
-                # 抽取实体
-                entities = entity_extractor.extract(chunk, top_k=20)
+                # 使用混合模式抽取实体和关系
+                entities, relations = entity_extractor.extract(
+                    chunk,
+                    use_llm=use_llm,
+                    llm_client=llm_client,
+                    top_k=20
+                )
                 total_entities += len(entities)
+                total_relations += len(relations)
 
                 # 添加到图谱
                 chunk_doc_id = f"{doc_id}_{i}"
@@ -308,12 +327,13 @@ class DocumentManager:
                     for e in entities
                 ]
 
-                # 将实体信息添加到metadata中用于检索
+                # 将实体和关系信息添加到metadata
                 metadata = {
                     "source": doc_info.file_path,
                     "chunk_index": i,
                     "total_chunks": len(chunks),
-                    "entities": ",".join([e.name for e in entities[:10]])  # 前10个实体
+                    "entities": ",".join([e.name for e in entities[:10]]),
+                    "relations": ",".join([f"{r.source}-{r.relation}-{r.target}" for r in relations[:5]])
                 }
 
                 graph_service.add_document(
@@ -322,15 +342,19 @@ class DocumentManager:
                     metadata=metadata,
                     entities=entity_objects
                 )
-                
+
                 # 每5块保存一次
                 if (i + 1) % 5 == 0:
                     graph_service._save_index()
-            
+
             doc_info.entities_count = total_entities
-            progress_callback(1.0, "索引完成")
-            logger.info(f"[{doc_info.name}] 索引完成: {total_entities} 个实体")
-                
+            progress_callback(1.0, f"索引完成（{total_entities}实体，{total_relations}关系）")
+            logger.info(f"[{doc_info.name}] 索引完成: {total_entities} 个实体, {total_relations} 个关系")
+
+            # 保存词典统计信息
+            stats = entity_extractor.get_statistics()
+            logger.info(f"[{doc_info.name}] 词典统计: {stats}")
+
         except Exception as e:
             logger.error(f"[{doc_info.name}] 索引错误: {e}")
             progress_callback(0.0, f"索引错误: {e}")
