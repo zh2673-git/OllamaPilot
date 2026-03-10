@@ -5,7 +5,6 @@ GraphRAG 服务层
 """
 
 from skills.graphrag.services.graphrag_service import GraphRAGService, Entity, Relation
-from skills.graphrag.services.ontology_generator import OntologyGenerator
 from skills.graphrag.services.entity_extractor import (
     HybridEntityExtractor,
     ExtractedEntity,
@@ -16,7 +15,6 @@ __all__ = [
     "GraphRAGService",
     "Entity",
     "Relation",
-    "OntologyGenerator",
     "HybridEntityExtractor",
     "ExtractedEntity",
     "ExtractedRelation",

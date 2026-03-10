@@ -11,10 +11,11 @@ import os
 import time
 
 from skills.graphrag.utils import DocumentProcessor
-from skills.graphrag.services import GraphRAGService, LightweightEntityExtractor, Entity
+from skills.graphrag.services import GraphRAGService, HybridEntityExtractor, Entity
+from skills.graphrag.llm_client import SimpleLLMClient
 from skills.graphrag.word_aligner import (
-    WordAligner, 
-    AlignedEntity, 
+    WordAligner,
+    AlignedEntity,
     AlignmentStatus,
     format_alignment_report,
     calculate_chunk_offsets
@@ -42,19 +43,25 @@ class KnowledgeBaseManager:
     def __init__(
         self,
         graph_service: GraphRAGService,
-        entity_extractor: LightweightEntityExtractor,
+        entity_extractor: Optional[HybridEntityExtractor] = None,
         document_processor: Optional[DocumentProcessor] = None,
         enable_word_aligner: bool = True,
-        fuzzy_threshold: float = 0.75
+        fuzzy_threshold: float = 0.75,
+        persist_dir: str = "./data/graphrag"
     ):
         self.graph_service = graph_service
-        self.entity_extractor = entity_extractor
+        # 初始化混合实体抽取器（如果没有提供）
+        self.entity_extractor = entity_extractor or HybridEntityExtractor(persist_dir=persist_dir)
+        # 初始化LLM客户端
+        self.llm_client = SimpleLLMClient()
+        self.use_llm = self.llm_client.is_available()
+
         # 使用更大的分块大小以减少块数量
         self.document_processor = document_processor or DocumentProcessor(
             chunk_size=2000,
             chunk_overlap=200
         )
-        
+
         # 初始化 WordAligner
         self.enable_word_aligner = enable_word_aligner
         if enable_word_aligner:
@@ -191,9 +198,14 @@ class KnowledgeBaseManager:
             try:
                 block_start = time.time()
 
-                # 步骤1: 抽取实体
+                # 步骤1: 使用混合模式抽取实体和关系
                 step_start = time.time()
-                entities = self.entity_extractor.extract(chunk)
+                entities, relations = self.entity_extractor.extract(
+                    chunk,
+                    use_llm=self.use_llm,
+                    llm_client=self.llm_client,
+                    top_k=20
+                )
                 extract_time = time.time() - step_start
 
                 # 收集原始实体信息
@@ -203,7 +215,8 @@ class KnowledgeBaseManager:
                         'type': e.type,
                         'chunk_index': i,
                         'start': e.start,
-                        'end': e.end
+                        'end': e.end,
+                        'source': e.source
                     })
 
                 # 步骤2: 添加到图谱（这会调用 Embedding 模型）
