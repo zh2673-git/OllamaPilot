@@ -128,8 +128,8 @@ class GraphRAGSkill(Skill):
         # 初始化服务
         self._init_services()
 
-        # 自动扫描知识库（后台异步）
-        self._start_background_indexing()
+        # 注意：自动索引已禁用，使用 /index 命令手动索引文档
+        # self._start_background_indexing()
 
     def _init_services(self):
         """初始化 GraphRAG 服务"""

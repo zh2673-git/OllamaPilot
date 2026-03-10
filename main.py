@@ -4,9 +4,10 @@ OllamaPilot - 智能助手启动入口
 直接运行: python main.py
 
 使用方法:
-    python main.py                    # 交互式选择模型
-    python main.py --model qwen3.5:4b # 指定对话模型
+    python main.py                    # 使用 .env 配置（推荐）
+    python main.py --model qwen3.5:4b # 指定对话模型（覆盖.env）
     python main.py --list             # 列出可用模型
+    python main.py --interactive      # 交互式选择模型
 
 交互命令 (在对话中输入):
     /help              显示帮助信息
@@ -17,6 +18,7 @@ OllamaPilot - 智能助手启动入口
     /switch <id>       切换到指定会话
     /clear             清空当前对话历史
     /embedding         切换 Embedding 模型
+    /index <doc>       手动索引文档
     quit/exit          退出程序
 """
 
@@ -39,7 +41,11 @@ from ollamapilot import (
     select_model_interactive,
 )
 from ollamapilot.agent import OllamaPilotAgent
+from ollamapilot.config import get_config, reload_config
 from langchain_core.language_models.chat_models import BaseChatModel
+
+# 加载配置
+config = get_config()
 
 
 class Session:
@@ -78,6 +84,9 @@ class OllamaPilotChat:
         
         # 初始化默认会话
         self._create_session("default", "默认会话")
+        
+        # 文档管理器
+        self.doc_manager = None
     
     def _create_session(self, session_id: str, name: str) -> Session:
         """创建新会话"""
@@ -90,8 +99,14 @@ class OllamaPilotChat:
         self.sessions[session_id] = session
         return session
     
-    def initialize(self, chat_model: str, embedding_model: Optional[str] = None) -> bool:
-        """初始化聊天管理器"""
+    def initialize(self, chat_model: str, embedding_model: Optional[str] = None, auto_index: bool = False) -> bool:
+        """初始化聊天管理器
+        
+        Args:
+            chat_model: 对话模型名称
+            embedding_model: Embedding模型名称
+            auto_index: 是否自动索引知识库（默认False，手动控制）
+        """
         try:
             print("\n🔄 正在初始化模型...")
             self.current_model = init_ollama_model(chat_model, temperature=self.temperature)
@@ -107,6 +122,16 @@ class OllamaPilotChat:
             self.agent = create_agent(self.current_model, **agent_kwargs)
             print("✅ Agent 创建完成")
             
+            # 初始化文档管理器（手动控制模式）
+            if embedding_model:
+                from skills.graphrag.document_manager import DocumentManager
+                self.doc_manager = DocumentManager(
+                    base_persist_dir=config.graph_rag_persist_dir,
+                    embedding_model=embedding_model
+                )
+                print(f"📚 文档管理器已加载（手动控制模式）")
+                print(f"   使用 /index 命令手动索引文档")
+            
             # 更新默认会话
             self.sessions["default"].model_name = chat_model
             self.sessions["default"].embedding_model = embedding_model
@@ -114,7 +139,75 @@ class OllamaPilotChat:
             return True
         except Exception as e:
             print(f"❌ 初始化失败: {e}")
+            import traceback
+            traceback.print_exc()
             return False
+    
+    def index_document(self, doc_path: str, doc_name: Optional[str] = None) -> bool:
+        """手动索引文档"""
+        if not self.doc_manager:
+            print("❌ 文档管理器未初始化（可能没有配置Embedding模型）")
+            return False
+        
+        if not doc_name:
+            doc_name = Path(doc_path).stem
+        
+        try:
+            print(f"\n📄 注册文档: {doc_name}")
+            doc_id = self.doc_manager.register_document(
+                doc_name=doc_name,
+                file_path=doc_path,
+                auto_index=False
+            )
+            
+            print(f"🔄 开始索引（静默模式）...")
+            self.doc_manager.start_indexing(doc_id, silent=True)
+            
+            # 等待完成
+            success = self.doc_manager.wait_for_indexing(doc_id, timeout=300)
+            
+            if success:
+                doc_info = self.doc_manager.get_document_status(doc_id)
+                print(f"✅ 索引完成: {doc_info.chunks_count} 块, {doc_info.entities_count} 个实体")
+            else:
+                print(f"❌ 索引失败或超时")
+            
+            return success
+            
+        except Exception as e:
+            print(f"❌ 索引失败: {e}")
+            return False
+    
+    def list_documents(self):
+        """列出所有文档"""
+        if not self.doc_manager:
+            print("❌ 文档管理器未初始化")
+            return
+        
+        docs = self.doc_manager.list_documents()
+        if not docs:
+            print("\n📭 没有文档")
+            return
+        
+        print("\n" + "=" * 70)
+        print("📚 文档列表")
+        print("=" * 70)
+        
+        for doc in docs:
+            status_icon = {
+                "pending": "⏳",
+                "running": "🔄",
+                "completed": "✅",
+                "failed": "❌"
+            }.get(doc.status.value, "❓")
+            
+            print(f"{status_icon} {doc.name}")
+            print(f"   ID: {doc.doc_id}")
+            print(f"   状态: {doc.status.value}")
+            print(f"   模型: {doc.model_name}")
+            if doc.chunks_count > 0:
+                print(f"   分块: {doc.chunks_count}, 实体: {doc.entities_count}")
+            print("-" * 70)
     
     def switch_model(self, model_name: str) -> bool:
         """切换对话模型"""
@@ -161,6 +254,16 @@ class OllamaPilotChat:
             new_agent = create_agent(self.current_model, **agent_kwargs)
             self.agent = new_agent
             self.current_embedding_model = embedding_model
+            
+            # 重新初始化文档管理器
+            if embedding_model:
+                from skills.graphrag.document_manager import DocumentManager
+                self.doc_manager = DocumentManager(
+                    base_persist_dir=config.graph_rag_persist_dir,
+                    embedding_model=embedding_model
+                )
+            else:
+                self.doc_manager = None
             
             # 更新当前会话
             if self.current_session_id in self.sessions:
@@ -251,6 +354,16 @@ class OllamaPilotChat:
                 self.sessions[self.current_session_id].message_count = 0
             print("\n✅ 已清空当前会话历史")
     
+    def reload_config(self):
+        """重新加载配置"""
+        try:
+            reload_config()
+            print("\n✅ 配置已重新加载")
+            print(f"   对话模型: {config.chat_model}")
+            print(f"   向量模型: {config.embedding_model}")
+        except Exception as e:
+            print(f"\n❌ 配置重载失败: {e}")
+    
     def show_help(self):
         """显示帮助信息"""
         help_text = """
@@ -268,6 +381,9 @@ class OllamaPilotChat:
 │  /switch <id>                  切换到指定会话                       │
 │  /clear                        清空当前对话历史                     │
 │  /info                         显示当前状态信息                     │
+│  /docs                         列出所有文档                         │
+│  /index <path> [name]          手动索引文档                         │
+│  /reload                       重新加载 .env 配置                   │
 │  quit/exit/q                   退出程序                             │
 └─────────────────────────────────────────────────────────────────────┘
 """
@@ -305,6 +421,7 @@ class OllamaPilotChat:
         print(f"温度: {self.temperature}")
         print("-" * 60)
         print("输入 /help 查看所有命令")
+        print("输入 /index <文件路径> 手动索引文档")
         print("输入 'quit' 或 'exit' 退出")
         print("=" * 60 + "\n")
     
@@ -318,17 +435,18 @@ class OllamaPilotChat:
         if not command.startswith('/'):
             return False
         
-        parts = command.split(maxsplit=1)
+        parts = command.split(maxsplit=2)
         cmd = parts[0].lower()
-        arg = parts[1] if len(parts) > 1 else None
+        arg1 = parts[1] if len(parts) > 1 else None
+        arg2 = parts[2] if len(parts) > 2 else None
         
         if cmd == '/help':
             self.show_help()
         
         elif cmd == '/model':
-            if arg:
+            if arg1:
                 # 直接切换到指定模型
-                self.switch_model(arg)
+                self.switch_model(arg1)
             else:
                 # 交互式选择
                 chat_models = list_ollama_chat_models()
@@ -372,15 +490,15 @@ class OllamaPilotChat:
                 print("⚠️ 无效选择")
         
         elif cmd == '/new':
-            name = arg if arg else None
+            name = arg1 if arg1 else None
             self.new_session(name)
         
         elif cmd == '/sessions':
             self.list_sessions()
         
         elif cmd == '/switch':
-            if arg:
-                self.switch_session(arg)
+            if arg1:
+                self.switch_session(arg1)
             else:
                 print("⚠️ 请指定会话ID，例如: /switch session_1")
         
@@ -389,6 +507,19 @@ class OllamaPilotChat:
         
         elif cmd == '/info':
             self.show_info()
+        
+        elif cmd == '/docs':
+            self.list_documents()
+        
+        elif cmd == '/index':
+            if arg1:
+                doc_name = arg2 if arg2 else None
+                self.index_document(arg1, doc_name)
+            else:
+                print("⚠️ 请指定文档路径，例如: /index ./伤寒论.txt")
+        
+        elif cmd == '/reload':
+            self.reload_config()
         
         else:
             print(f"❌ 未知命令: {cmd}，输入 /help 查看帮助")
@@ -503,11 +634,13 @@ def select_models_interactive() -> Tuple[Optional[str], Optional[str]]:
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(description="OllamaPilot 智能助手")
-    parser.add_argument("--model", "-m", type=str, help="对话模型名称")
-    parser.add_argument("--embedding-model", "-e", type=str, help="Embedding模型名称")
+    parser.add_argument("--model", "-m", type=str, help="对话模型名称（覆盖.env）")
+    parser.add_argument("--embedding-model", "-e", type=str, help="Embedding模型名称（覆盖.env）")
     parser.add_argument("--list", "-l", action="store_true", help="列出可用模型")
-    parser.add_argument("--temperature", "-t", type=float, default=0.7, help="温度参数")
+    parser.add_argument("--temperature", "-t", type=float, default=None, help="温度参数")
     parser.add_argument("--skills-dir", "-s", type=str, default="skills", help="Skill 目录")
+    parser.add_argument("--interactive", "-i", action="store_true", help="交互式选择模型（忽略.env）")
+    parser.add_argument("--auto-index", action="store_true", help="自动索引知识库（默认关闭）")
     args = parser.parse_args()
 
     # 列出模型
@@ -530,48 +663,51 @@ def main():
             print("⚠️ 未检测到 Ollama 模型或服务未启动\n")
         return
 
+    # 显示配置信息
+    print(f"✅ 已加载配置: {config.env_file}")
+    print(f"   默认对话模型: {config.chat_model}")
+    print(f"   默认向量模型: {config.embedding_model}")
+
     # 选择模型
     chat_model = None
     embedding_model = None
 
-    if args.model and args.embedding_model:
-        chat_model = args.model
-        embedding_model = args.embedding_model
-        print(f"✅ 使用对话模型: {chat_model}")
-        print(f"✅ 使用 Embedding 模型: {embedding_model}")
-    elif args.model:
-        chat_model = args.model
-        print(f"✅ 使用对话模型: {chat_model}")
-
-        embedding_models = list_ollama_embedding_models()
-        if embedding_models:
-            print("\n📋 可用 Embedding 模型:")
-            for i, m in enumerate(embedding_models, 1):
-                print(f"  {i}. {m}")
-            try:
-                choice = input(f"\n请选择 (1-{len(embedding_models)}, 直接回车跳过): ").strip()
-                if choice:
-                    idx = int(choice) - 1
-                    embedding_model = embedding_models[idx] if 0 <= idx < len(embedding_models) else embedding_models[0]
-                    print(f"✅ 已选择: {embedding_model}")
-            except (ValueError, IndexError):
-                pass
-        if not embedding_model:
-            print("⚠️ 未选择 Embedding 模型")
-    else:
+    if args.interactive:
+        # 交互式选择（忽略.env）
         chat_model, embedding_model = select_models_interactive()
         if not chat_model:
             print("❌ 未选择有效的对话模型")
             return
+    elif args.model and args.embedding_model:
+        # 命令行指定两个模型
+        chat_model = args.model
+        embedding_model = args.embedding_model
+        print(f"\n✅ 使用命令行指定的对话模型: {chat_model}")
+        print(f"✅ 使用命令行指定的 Embedding 模型: {embedding_model}")
+    elif args.model:
+        # 命令行只指定对话模型，Embedding使用.env或交互选择
+        chat_model = args.model
+        embedding_model = config.embedding_model
+        print(f"\n✅ 使用命令行指定的对话模型: {chat_model}")
+        print(f"✅ 使用配置文件的 Embedding 模型: {embedding_model}")
+    else:
+        # 使用.env配置
+        chat_model = config.chat_model
+        embedding_model = config.embedding_model
+        print(f"\n✅ 使用配置文件的对话模型: {chat_model}")
+        print(f"✅ 使用配置文件的 Embedding 模型: {embedding_model}")
+
+    # 温度参数
+    temperature = args.temperature if args.temperature is not None else config.chat_temperature
 
     # 创建聊天管理器
     chat_manager = OllamaPilotChat(
         skills_dir=args.skills_dir,
-        temperature=args.temperature
+        temperature=temperature
     )
     
-    # 初始化
-    if not chat_manager.initialize(chat_model, embedding_model):
+    # 初始化（默认关闭自动索引）
+    if not chat_manager.initialize(chat_model, embedding_model, auto_index=args.auto_index):
         return
     
     # 显示欢迎信息
