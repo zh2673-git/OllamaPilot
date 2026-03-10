@@ -72,10 +72,13 @@ class DocumentManager:
         
         # 文档信息存储
         self.documents: Dict[str, DocumentInfo] = {}
-        
+
         # 后台任务
         self._indexing_tasks: Dict[str, threading.Thread] = {}
-        
+
+        # 缓存 GraphRAGService 实例（避免重复创建）
+        self._graph_service_cache: Dict[str, Any] = {}
+
         # 加载已有文档信息
         self._load_document_registry()
     
@@ -490,37 +493,41 @@ class DocumentManager:
         print(f"✅ 已恢复 {len(resumed)}/{len(failed_docs)} 个任务")
         return resumed
 
+    def _get_cached_graph_service(self, doc_id: str, doc_info: DocumentInfo):
+        """获取缓存的 GraphRAGService 实例"""
+        from skills.graphrag.services import GraphRAGService
+
+        cache_key = f"{doc_id}_{doc_info.model_name}"
+
+        if cache_key not in self._graph_service_cache:
+            storage_path = self._get_document_storage_path(doc_info.name, doc_info.model_name)
+            self._graph_service_cache[cache_key] = GraphRAGService(
+                persist_dir=str(storage_path),
+                embedding_model=doc_info.model_name or self.embedding_model
+            )
+
+        return self._graph_service_cache[cache_key]
+
     def search_all_documents(self, query: str, n_results: int = 5) -> List[Dict[str, Any]]:
         """
-        搜索所有已索引的文档
+        搜索所有已索引的文档（使用缓存优化）
 
         Args:
             query: 查询文本
-            n_results: 每个文档返回的结果数量
+            n_results: 返回结果数量
 
         Returns:
-            合并的搜索结果列表
+            搜索结果列表
         """
-        from skills.graphrag.services import GraphRAGService
-
         all_results = []
 
-        # 遍历所有已完成的文档
         for doc_id, doc_info in self.documents.items():
             if doc_info.status != IndexingStatus.COMPLETED:
                 continue
 
             try:
-                # 获取文档的存储路径
-                storage_path = self._get_document_storage_path(doc_info.name, doc_info.model_name)
-
-                # 创建临时的 GraphRAGService 来搜索该文档
-                graph_service = GraphRAGService(
-                    persist_dir=str(storage_path),
-                    embedding_model=doc_info.model_name or self.embedding_model
-                )
-
-                # 执行向量搜索
+                # 使用缓存的 GraphRAGService
+                graph_service = self._get_cached_graph_service(doc_id, doc_info)
                 results = graph_service.vector_search(query, n_results=n_results)
 
                 # 添加文档信息到结果
@@ -537,6 +544,8 @@ class DocumentManager:
         # 按相似度排序并返回前 n_results 个
         all_results.sort(key=lambda x: x.get('score', 0), reverse=True)
         return all_results[:n_results]
+
+
 
     def get_global_stats(self) -> Dict[str, Any]:
         """
