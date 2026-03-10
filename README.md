@@ -1,44 +1,52 @@
 # OllamaPilot
 
 <p align="center">
-  <strong>基于 LangChain 1.0+ 的本地智能助手框架</strong><br>
-  <em>让 4B 小模型也能稳定执行复杂任务</em>
+  <strong>🚀 本地 AI 智能助手框架</strong><br>
+  <em>LangChain 1.0+ × Ollama 小模型 × GraphRAG 知识图谱 × 零 API 网络搜索 × OpenCode 式终端交互</em>
 </p>
 
 <p align="center">
-  <a href="#特性">特性</a> •
-  <a href="#快速开始">快速开始</a> •
-  <a href="#skill-系统">Skill 系统</a> •
-  <a href="#架构">架构</a> •
-  <a href="#测试">测试</a>
+  <a href="#-五大核心亮点">亮点</a> •
+  <a href="#-快速开始">快速开始</a> •
+  <a href="#-核心功能">核心功能</a> •
+  <a href="#-skill-系统">Skill 系统</a> •
+  <a href="#-架构">架构</a>
 </p>
 
 ---
 
-## ✨ 为什么选择 OllamaPilot？
+## 🎯 五大核心亮点
 
-### 🎯 三大核心优势
-
-#### 1️⃣ 完全本地运行 - 零云端依赖
-
-- 🔒 **数据隐私**：所有模型运行在本地，数据不出你的电脑
-- 💰 **零成本**：无需 API 费用，一次下载永久使用  
-- 🚀 **4B 模型可用**：专门优化，让小模型也能干大事
-
-#### 2️⃣ 基于 LangChain 1.0+ 原生实现
-
-- ✅ 使用 `create_agent()` 工厂函数，代码简洁优雅
+### 1️⃣ LangChain 1.0+ 原生架构
+- ✅ 基于 `create_agent()` 工厂函数，代码简洁优雅
 - ✅ Skill 即 Middleware，符合 LangChain 设计哲学
 - ✅ 自动获得内置中间件（重试、限流、日志）
-- ✅ 跟随 LangChain 升级，维护简单
+- ✅ 跟随官方升级，维护简单
 
-#### 3️⃣ 渐进式 Skill 系统
+### 2️⃣ Ollama 小模型优化
+- 🚀 **4B 模型也能干大事**：专门优化让小模型稳定执行复杂任务
+- 💰 **零成本**：无需 API 费用，一次下载永久使用
+- 🔒 **数据隐私**：所有模型本地运行，数据不出你的电脑
+- 📦 **模型丰富**：支持 qwen、glm、llama 等主流模型
 
-| 复杂度 | 方式 | 代码量 | 适用场景 |
-|:------:|------|:------:|----------|
-| ⭐ | **SKILL.md** | 0 行 | 简单任务，纯配置 |
-| ⭐⭐ | **Python Skill** | 20 行 | 自定义逻辑 |
-| ⭐⭐⭐ | **MCP + 自定义** | 50 行 | 复杂集成，外部服务 |
+### 3️⃣ GraphRAG 知识图谱（Morifish 风格）
+- 🗂️ **多格式文档解析**：PDF、TXT、Markdown 自动处理
+- 🔗 **实体关系抽取**：自动构建知识网络，比纯向量检索更精准
+- 🧩 **智能文档分块**：大文档自动切分，保持语义连贯
+- ⚡ **后台异步索引**：启动即可对话，索引不阻塞
+- 💾 **多模型隔离存储**：切换 Embedding 模型不丢失数据
+
+### 4️⃣ 零 API 网络搜索
+- 🌐 **自动部署 SearXNG**：无需配置，首次使用自动拉取 Docker 镜像
+- 🔍 **实时信息获取**：天气、股价、新闻，联网即查
+- 🛡️ **隐私保护**：搜索通过自建 SearXNG，不依赖第三方 API
+- 📡 **远程服务支持**：可配置外部 SearXNG 实例
+
+### 5️⃣ OpenCode 式终端交互
+- ⌨️ **斜杠命令体系**：`/model`、`/new`、`/sessions` 等命令快速操作
+- 🔄 **运行时模型切换**：无需重启程序即可更换模型
+- 💬 **多会话管理**：每个会话独立历史，随时切换
+- 📊 **实时状态显示**：当前模型、会话、消息数一目了然
 
 ---
 
@@ -63,19 +71,28 @@ response = agent.invoke("明天苏州天气怎么样？")
 print(response)
 ```
 
-### 运行交互式对话
+### 运行交互式对话（推荐）
 
 ```bash
 python main.py
 ```
 
+**交互命令示例**：
+```
+你: /help              # 显示所有命令
+你: /model             # 切换对话模型
+你: /model qwen2.5:7b  # 直接指定模型
+你: /new               # 创建新会话
+你: /sessions          # 查看所有会话
+你: /switch session_1  # 切换会话
+你: /clear             # 清空当前对话
+```
+
 ---
 
-## 🧠 核心功能：让智能体"睁眼看世界"
+## 🧠 核心功能
 
-OllamaPilot v0.1.3 引入两大核心能力，让本地模型既能**连接互联网**获取实时信息，又能**深度理解本地文档**进行知识问答。
-
-### 🌐 Web 搜索 - 连接互联网
+### 🌐 Web 搜索 - 零 API 连接互联网
 
 通过内置的 `web_search` 和 `web_fetch` 工具，智能体可以：
 - 🔍 实时搜索网络信息
@@ -88,9 +105,20 @@ agent.invoke("今天比特币价格是多少？")
 # AI 会自动搜索网络并返回实时价格
 ```
 
-### 📚 GraphRAG - 深度理解本地文档
+**自动部署 SearXNG**：
+```python
+# 首次使用 web_search 时自动完成：
+# 1. 检查 Docker 是否安装
+# 2. 自动拉取 searxng/searxng 镜像
+# 3. 创建并启动容器
+# 4. 等待服务就绪
 
-**GraphRAG（Graph Retrieval-Augmented Generation）** 是 v0.1.3 的核心升级：
+agent.invoke("搜索 Python 3.13 新特性")
+```
+
+### 📚 GraphRAG - 知识图谱增强检索
+
+**GraphRAG（Graph Retrieval-Augmented Generation）** 让本地模型深度理解你的文档：
 
 | 特性 | 说明 |
 |------|------|
@@ -246,6 +274,7 @@ agent = create_agent(model, middleware=[mcp_mw])
 - **LangGraph**：`MemorySaver` 实现对话记忆
 - **Ollama**：本地模型支持（qwen3.5:4b/9b/35b, glm-4.7-flash 等）
 - **GraphRAG**：知识图谱 + 向量检索混合架构
+- **SearXNG**：零 API 网络搜索
 
 ---
 
@@ -265,339 +294,39 @@ agent = create_agent(model, middleware=[mcp_mw])
 | `shell_exec` | 执行 Shell 命令 | `shell_exec.invoke({"command": "ls"})` |
 | `shell_script` | 执行 Shell 脚本 | `shell_script.invoke({"script": "echo hello"})` |
 
-### 🔍 Web 搜索配置
-
-`web_search` 工具依赖 [SearXNG](https://github.com/searxng/searxng) 搜索引擎，支持**自动部署**：
-
-```python
-# 首次使用时会自动检测并启动 SearXNG
-agent.invoke("搜索 Python 3.13 新特性")
-
-# 手动管理服务
-from ollamapilot.tools.builtin import web_search_setup
-
-web_search_setup("status")  # 检查状态
-web_search_setup("start")   # 启动服务
-web_search_setup("stop")    # 停止服务
-web_search_setup("logs")    # 查看日志
-```
-
-**部署方式**：
-
-1. **全自动部署**（推荐）：首次使用时会自动完成：
-   - 检查 Docker 是否安装
-   - 自动拉取 `searxng/searxng` 镜像（如本地不存在）
-   - 创建并启动容器
-   - 等待服务就绪
-
-2. **手动部署**：`docker run -d --name searxng -p 8080:8080 searxng/searxng`
-
-3. **远程服务**：设置环境变量 `export SEARXNG_URL='http://your-searxng-url'`
-
-### 📚 GraphRAG 配置
-
-```bash
-# 1. 创建知识库目录
-mkdir knowledge_base
-
-# 2. 放入文档（PDF、TXT、Markdown 等）
-cp your_document.pdf knowledge_base/
-
-# 3. 启动程序，自动索引
-python main.py
-
-# 4. 选择 Embedding 模型（可选）
-#    - qwen3-embedding:0.6b (快速，质量一般)
-#    - qwen3-embedding:4b (平衡)
-#    - qwen3-embedding:8b (高质量，较慢)
-```
-
-**特性**：
-- ✅ 后台异步索引，启动即可对话
-- ✅ 多 Embedding 模型隔离存储，切换模型不丢失数据
-- ✅ 自动实体抽取和关系构建
-- ✅ 支持大文档智能分块
-
 ---
 
-## ✅ 测试
+## 📋 版本历史
 
-### 运行测试
+### v0.1.7 (当前) - 模型切换与会话管理
 
-```bash
-python tests/test_agent.py
-```
+**🎉 重磅更新：OpenCode 式终端交互**
 
-### 测试结果
+- ✅ **斜杠命令体系**：`/model`、`/new`、`/sessions` 等命令
+- ✅ **运行时模型切换**：无需重启即可切换对话模型
+- ✅ **多会话管理**：每个会话独立 thread_id，历史隔离
+- ✅ **Embedding 动态切换**：可随时切换或禁用 Embedding 模型
 
-```
-============================================================
-OllamaPilot 测试套件
-============================================================
+### v0.1.6 - 修复 Skill 冲突
 
-✅ 发现模型: qwen3.5:4b
-======================== test session starts ========================
-platform win32 -- Python 3.11.5, pytest-8.4.2
-collected 8 items
+- ✅ 修复 GraphRAG 拦截其他 Skill 的问题
+- ✅ 添加 active_skill 状态跟踪
 
-tests/test_agent.py::TestBasicFunctionality::test_list_models PASSED
-tests/test_agent.py::TestBasicFunctionality::test_init_model PASSED
-tests/test_agent.py::TestAgent::test_agent_creation PASSED
-tests/test_agent.py::TestAgent::test_simple_chat PASSED
-tests/test_agent.py::TestAgent::test_python_tool PASSED
-tests/test_agent.py::TestAgent::test_file_tool PASSED
-tests/test_agent.py::TestQuestions::test_question_1_weekday PASSED
-tests/test_agent.py::TestQuestions::test_question_2_weather PASSED
+### v0.1.5 - 流式输出优化
 
-============= 8 passed in 52.31s =============
-```
+- ✅ 修复流式输出重复显示问题
+- ✅ 添加聊天问题检测，智能跳过知识库检索
 
-### 测试覆盖
+### v0.1.4 - 数据目录隔离
 
-- ✅ 模型列表和初始化
-- ✅ Agent 创建和配置
-- ✅ 简单对话
-- ✅ Python 工具执行
-- ✅ 文件工具执行
-- ✅ **测试题目 1**：明天星期几 ✓
-- ✅ **测试题目 2**：明天苏州天气怎么样 ✓
-- ✅ **记忆功能**：多轮对话记忆测试 ✓
+- ✅ 添加 .gitignore 排除 knowledge_base/ 和 data/ 目录
+- ✅ 修复流式输出偶发无响应问题
 
----
-
-## 🎯 实战演示
-
-### 示例 1：天气查询（Web 搜索）
-
-```
-用户: 明天苏州天气怎么样
-🎯 激活 Skill: weather
-🔧 执行工具: web_search({'query': '苏州明天天气'})
-   ✅ 结果: 🔍 搜索 '苏州明天天气' 的结果（5 条）:
-           1. 苏州天气预报-中央气象台
-              URL: https://www.nmc.cn/publish/forecast/AJS/suzhou.html
-🔧 执行工具: web_fetch({'url': 'https://www.nmc.cn/publish/forecast/AJS/suzhou.html'})
-   ✅ 结果: 📄 标题: 苏州天气预报
-           🔗 URL: https://www.nmc.cn/publish/forecast/AJS/suzhou.html
-
-AI: 根据查询结果，苏州明天的天气情况如下：
-
-## 🌤️ 苏州明天天气预报
-
-| 项目 | 详情 |
-|------|------|
-| **天气状况** | ☀️晴 |
-| **温度范围** | 6 ~ 14℃ |
-| **空气质量** | ✅优 |
-```
-
-### 示例 2：本地文档问答（GraphRAG）
-
-```
-用户: 伤寒论中桂枝汤的主要成分有哪些？
-🎯 激活 Skill: graphrag
-🔍 检索知识库...
-   ✅ 找到 5 个相关片段
-   ✅ 识别实体: 桂枝汤、桂枝、芍药、甘草、生姜、大枣
-🔧 执行工具: search_knowledge({'query': '桂枝汤 成分'})
-   ✅ 结果: 📚 从本地知识库检索到相关信息
-
-AI: 根据《伤寒论》记载，桂枝汤的主要成分包括：
-
-## 🍵 桂枝汤组成
-
-| 药材 | 用量 | 功效 |
-|------|------|------|
-| **桂枝** | 三两 | 解肌发表，温通经脉 |
-| **芍药** | 三两 | 养血敛阴，柔肝止痛 |
-| **甘草** | 二两 | 调和诸药，补中益气 |
-| **生姜** | 三两 | 温中止呕，解表散寒 |
-| **大枣** | 十二枚 | 补脾益气，养血安神 |
-
-**用法**：水煎服，温服取微汗。
-```
-
-### 示例 3：Python 计算
-
-```
-用户: 计算 1+2+3+4+5 等于多少
-🔧 执行工具: python_exec({'code': 'sum([1,2,3,4,5])'})
-   ✅ 结果: >>> Python 代码执行
-           ==================================================
-           代码:
-           result = sum([1,2,3,4,5])
-           print(result)
-           ==================================================
-
-           📤 输出:
-           15
-
-           ✅ 执行成功
-
-AI: 1 + 2 + 3 + 4 + 5 = **15**
-```
-
-### 示例 4：记忆功能
-
-```python
-# 第一轮
-agent.invoke("我叫张三", thread_id="session_1")
-# AI: 你好张三！很高兴认识你。
-
-# 第二轮（同一个 session）
-agent.invoke("你还记得我叫什么名字吗？", thread_id="session_1")
-# AI: 当然记得，你叫张三！
-```
-
-### 示例 5：文件操作
-
-```
-用户: 列出当前目录的文件
-🔧 执行工具: list_directory({'path': '.'})
-   ✅ 结果: 📁 目录: D:\xx\OllamaPilot
-           ==================================================
-           📂 .git/
-           📂 ollamapilot/
-           📂 skills/
-           📂 tests/
-           📄 README.md
-           📄 main.py
-           📄 pyproject.toml
-
-AI: 当前目录下有以下内容和文件：
-
-**📁 子目录：**
-1. `.git/` - Git版本控制信息
-2. `ollamapilot/` - OllamaPilot主包目录
-3. `skills/` - 技能相关文件夹
-4. `tests/` - 测试文件目录
-
-**📄 文本文件：**
-1. `README.md` (11.4KB) - 项目说明文档
-2. `main.py` (3.7KB) - 主程序入口脚本
-3. `pyproject.toml` (1.6KB) - Python项目配置文件
-```
-
----
-
-## 📁 项目结构
-
-```
-OllamaPilot/
-├── ollamapilot/              # 核心包
-│   ├── __init__.py
-│   ├── agent.py              # Agent 实现（基于 create_agent）
-│   ├── skill_middleware.py   # Skill 中间件
-│   ├── models.py             # 模型初始化
-│   └── tools/
-│       ├── __init__.py
-│       ├── builtin.py        # 9个内置工具
-│       ├── mcp_tools.py      # MCP 工具支持
-│       └── custom/           # 自定义工具目录
-│           └── __init__.py
-├── skills/                   # Skill 目录（用户自定义）
-│   ├── graphrag/             # GraphRAG Skill - 知识图谱检索
-│   ├── weather/              # 天气查询 Skill
-│   └── web_search/           # Web 搜索 Skill
-├── knowledge_base/           # 知识库目录（存放本地文档）
-├── data/                     # 数据存储目录
-│   └── graphrag/             # GraphRAG 索引数据
-├── tests/
-│   └── test_agent.py         # 测试套件
-├── .gitignore
-├── LICENSE
-├── main.py                   # CLI 入口
-├── pyproject.toml            # 项目配置
-└── README.md                 # 本文档
-```
-
----
-
-## 🔧 高级配置
-
-### 记忆功能
-
-```python
-# 启用记忆
-agent = create_agent(model, enable_memory=True)
-
-# 多轮对话
-response1 = agent.invoke("我叫张三", thread_id="session_1")
-response2 = agent.invoke("我叫什么名字？", thread_id="session_1")  # 记得！
-
-# 清除记忆
-agent.clear_history("session_1")
-```
-
-### 详细日志
-
-```python
-agent = create_agent(model, verbose=True)
-# 输出：
-# 📦 已加载 1 个 Skill
-# 🎯 激活 Skill: weather
-# 🔧 执行工具: web_search({'query': '苏州天气'})
-#    ✅ 结果: ...
-```
-
-### 自定义中间件
-
-```python
-from langchain.agents.middleware import ToolRetryMiddleware
-
-agent = create_agent(
-    model=model,
-    middleware=[
-        ToolRetryMiddleware(max_retries=3),  # 工具重试
-    ]
-)
-```
-
----
-
-## 📊 性能优化
-
-针对小模型的工程优化：
-
-- **工具重试**：`ToolRetryMiddleware` 自动重试失败工具
-- **调用限制**：`ToolCallLimitMiddleware` 防止无限循环
-- **详细日志**：verbose 模式显示执行过程，便于调试
-- **Skill 选择**：自动选择最合适的 Skill，减少模型困惑
-- **后台索引**：GraphRAG 文档索引在后台进行，不阻塞对话
-
----
-
-## 📜 版本历史
-
-### v0.1.3 (当前) - 智能体"睁眼看世界"
-
-**🎉 重磅更新：GraphRAG 知识图谱检索**
+### v0.1.3 - GraphRAG 知识图谱
 
 - ✅ **GraphRAG Skill**：基于知识图谱的本地文档问答
-  - 自动索引 PDF、TXT、Markdown 等文档
-  - 实体抽取和关系构建
-  - 混合检索（实体关系 + 向量相似度）
-  - 后台异步索引，启动即可对话
-  - 多 Embedding 模型隔离存储
-- ✅ **Web 搜索增强**：自动部署 SearXNG，连接互联网
+- ✅ **Web 搜索增强**：自动部署 SearXNG
 - ✅ **双模式协同**：Web 搜索 + GraphRAG 联合回答
-- ✅ **知识库管理**：`knowledge_base/` 目录自动扫描
-
-### v0.1.1
-
-- ✅ 修复 Skill 激活日志显示问题
-- ✅ 优化工具调用日志显示
-
-### v0.1.0
-
-- ✅ 基于 LangChain 1.0+ `create_agent`
-- ✅ Skill 系统（SKILL.md + Python）
-- ✅ 内置 9 个工具
-- ✅ MCP 工具支持
-- ✅ 自定义工具支持
-- ✅ 记忆功能
-- ✅ 中间件系统
-- ✅ 8 项测试全部通过
 
 ---
 
