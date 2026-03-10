@@ -18,19 +18,27 @@ OllamaPilot - 智能助手启动入口
     /switch <id>       切换到指定会话
     /clear             清空当前对话历史
     /embedding         切换 Embedding 模型
-    /index <doc>       手动索引文档
+    /index <doc>       手动索引文档或文件夹
     quit/exit          退出程序
 """
 
 import argparse
 import sys
 import uuid
+import glob
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent))
+
+# 尝试导入 readline 用于命令自动补全
+try:
+    import readline
+    HAS_READLINE = True
+except ImportError:
+    HAS_READLINE = False
 
 from ollamapilot import (
     init_ollama_model,
@@ -60,12 +68,43 @@ class Session:
         self.message_count = 0
 
 
+class CommandCompleter:
+    """命令自动补全器"""
+    
+    # 所有可用命令
+    COMMANDS = [
+        '/help', '/model', '/embedding', '/new', '/sessions',
+        '/switch', '/clear', '/info', '/docs', '/index', '/reload',
+        'quit', 'exit', 'q', 'bye'
+    ]
+    
+    def __init__(self):
+        self.current_candidates = []
+    
+    def complete(self, text, state):
+        """补全函数"""
+        if state == 0:
+            # 第一次调用，生成候选列表
+            if text.startswith('/'):
+                self.current_candidates = [cmd for cmd in self.COMMANDS if cmd.startswith(text)]
+            else:
+                self.current_candidates = []
+        
+        # 返回当前状态的候选
+        if state < len(self.current_candidates):
+            return self.current_candidates[state]
+        return None
+
+
 class OllamaPilotChat:
     """
     OllamaPilot 聊天管理器
     
     管理多会话、模型切换、对话历史等功能
     """
+    
+    # 支持的文档扩展名
+    SUPPORTED_EXTENSIONS = {'.txt', '.md', '.pdf', '.docx', '.doc'}
     
     def __init__(self, skills_dir: str = "skills", temperature: float = 0.7):
         self.skills_dir = skills_dir
@@ -87,6 +126,9 @@ class OllamaPilotChat:
         
         # 文档管理器
         self.doc_manager = None
+        
+        # 设置命令自动补全
+        self._setup_autocomplete()
     
     def _create_session(self, session_id: str, name: str) -> Session:
         """创建新会话"""
@@ -98,6 +140,65 @@ class OllamaPilotChat:
         )
         self.sessions[session_id] = session
         return session
+    
+    def _setup_autocomplete(self):
+        """设置命令自动补全"""
+        if HAS_READLINE:
+            completer = CommandCompleter()
+            readline.set_completer(completer.complete)
+            readline.parse_and_bind('tab: complete')
+            # 设置补全分隔符，让 / 也被视为单词的一部分
+            readline.set_completer_delims(' \t\n;')
+    
+    def _get_files_in_directory(self, dir_path: str) -> List[str]:
+        """获取目录中所有支持的文档文件"""
+        files = []
+        path = Path(dir_path)
+        
+        if not path.exists() or not path.is_dir():
+            return files
+        
+        # 递归查找所有支持的文件
+        for ext in self.SUPPORTED_EXTENSIONS:
+            files.extend(path.rglob(f"*{ext}"))
+        
+        return [str(f) for f in files]
+    
+    def _select_folder_interactive(self) -> Optional[str]:
+        """交互式选择文件夹"""
+        print("\n📁 选择要索引的文件夹:")
+        
+        # 列出当前目录下的文件夹
+        current_dir = Path(".")
+        folders = [d for d in current_dir.iterdir() if d.is_dir() and not d.name.startswith('.')]
+        
+        if not folders:
+            print("  当前目录下没有文件夹")
+            return None
+        
+        print("\n  可用文件夹:")
+        for i, folder in enumerate(folders, 1):
+            # 计算文件夹中的文档数量
+            doc_count = len(self._get_files_in_directory(str(folder)))
+            print(f"  {i}. {folder.name} ({doc_count} 个文档)")
+        
+        print("  0. 输入自定义路径")
+        
+        try:
+            choice = input(f"\n请选择 (0-{len(folders)}): ").strip()
+            idx = int(choice)
+            
+            if idx == 0:
+                custom_path = input("请输入文件夹路径: ").strip()
+                return custom_path if custom_path else None
+            elif 1 <= idx <= len(folders):
+                return str(folders[idx - 1])
+            else:
+                print("⚠️ 无效选择")
+                return None
+        except (ValueError, IndexError):
+            print("⚠️ 无效输入")
+            return None
     
     def initialize(self, chat_model: str, embedding_model: Optional[str] = None, auto_index: bool = False) -> bool:
         """初始化聊天管理器
@@ -144,13 +245,25 @@ class OllamaPilotChat:
             return False
     
     def index_document(self, doc_path: str, doc_name: Optional[str] = None) -> bool:
-        """手动索引文档"""
+        """手动索引文档或文件夹
+        
+        Args:
+            doc_path: 文档路径或文件夹路径
+            doc_name: 文档名称（可选，文件夹索引时忽略）
+        """
         if not self.doc_manager:
             print("❌ 文档管理器未初始化（可能没有配置Embedding模型）")
             return False
         
+        path = Path(doc_path)
+        
+        # 处理文件夹
+        if path.is_dir():
+            return self._index_directory(doc_path)
+        
+        # 处理单个文件
         if not doc_name:
-            doc_name = Path(doc_path).stem
+            doc_name = path.stem
         
         try:
             print(f"\n📄 注册文档: {doc_name}")
@@ -177,6 +290,64 @@ class OllamaPilotChat:
         except Exception as e:
             print(f"❌ 索引失败: {e}")
             return False
+    
+    def _index_directory(self, dir_path: str) -> bool:
+        """索引整个文件夹"""
+        print(f"\n📁 索引文件夹: {dir_path}")
+        
+        # 获取所有支持的文件
+        files = self._get_files_in_directory(dir_path)
+        
+        if not files:
+            print(f"⚠️ 文件夹中没有支持的文档（支持: {', '.join(self.SUPPORTED_EXTENSIONS)}）")
+            return False
+        
+        print(f"  发现 {len(files)} 个文档")
+        print("\n  文档列表:")
+        for i, file in enumerate(files[:10], 1):  # 只显示前10个
+            print(f"    {i}. {Path(file).name}")
+        if len(files) > 10:
+            print(f"    ... 还有 {len(files) - 10} 个文档")
+        
+        # 确认是否索引
+        confirm = input(f"\n是否索引这 {len(files)} 个文档? (y/n): ").strip().lower()
+        if confirm != 'y':
+            print("  已取消")
+            return False
+        
+        # 批量索引
+        success_count = 0
+        failed_count = 0
+        
+        print(f"\n🔄 开始批量索引...")
+        for i, file_path in enumerate(files, 1):
+            file_name = Path(file_path).stem
+            print(f"\n  [{i}/{len(files)}] {file_name}")
+            
+            try:
+                doc_id = self.doc_manager.register_document(
+                    doc_name=file_name,
+                    file_path=file_path,
+                    auto_index=False
+                )
+                
+                self.doc_manager.start_indexing(doc_id, silent=True)
+                success = self.doc_manager.wait_for_indexing(doc_id, timeout=300)
+                
+                if success:
+                    success_count += 1
+                    doc_info = self.doc_manager.get_document_status(doc_id)
+                    print(f"  ✅ 完成: {doc_info.chunks_count} 块, {doc_info.entities_count} 实体")
+                else:
+                    failed_count += 1
+                    print(f"  ❌ 失败")
+                    
+            except Exception as e:
+                failed_count += 1
+                print(f"  ❌ 错误: {e}")
+        
+        print(f"\n📊 批量索引完成: {success_count} 成功, {failed_count} 失败, 总计 {len(files)}")
+        return success_count > 0
     
     def list_documents(self):
         """列出所有文档"""
@@ -382,7 +553,7 @@ class OllamaPilotChat:
 │  /clear                        清空当前对话历史                     │
 │  /info                         显示当前状态信息                     │
 │  /docs                         列出所有文档                         │
-│  /index <path> [name]          手动索引文档                         │
+│  /index [path]                 手动索引文档或文件夹                 │
 │  /reload                       重新加载 .env 配置                   │
 │  quit/exit/q                   退出程序                             │
 └─────────────────────────────────────────────────────────────────────┘
@@ -513,10 +684,13 @@ class OllamaPilotChat:
         
         elif cmd == '/index':
             if arg1:
-                doc_name = arg2 if arg2 else None
-                self.index_document(arg1, doc_name)
+                # 用户指定了路径
+                self.index_document(arg1)
             else:
-                print("⚠️ 请指定文档路径，例如: /index ./伤寒论.txt")
+                # 交互式选择文件夹
+                folder = self._select_folder_interactive()
+                if folder:
+                    self.index_document(folder)
         
         elif cmd == '/reload':
             self.reload_config()
