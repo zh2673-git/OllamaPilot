@@ -160,6 +160,7 @@ class HybridEntityExtractor:
         entities.extend(dict_entities)
 
         # 2. LLM抽取（智能路径）
+        # 大模型会从文本中自动识别实体，无需复杂的规则匹配
         if use_llm and llm_client:
             llm_entities, llm_relations = self._extract_with_llm(text, llm_client, found_positions)
             entities.extend(llm_entities)
@@ -168,11 +169,11 @@ class HybridEntityExtractor:
             # 3. 动态学习：LLM发现的新实体加入词典
             self._learn_from_llm(llm_entities)
 
-        # 4. 去重和排序
+        # 3. 去重和排序
         entities = self._deduplicate_entities(entities)
         entities.sort(key=lambda e: (e.confidence, len(e.name)), reverse=True)
 
-        # 5. 推断共现关系（如果LLM没有提供足够关系）
+        # 4. 推断共现关系（如果LLM没有提供足够关系）
         if len(relations) < 3 and len(entities) > 1:
             cooccurrence_relations = self._infer_cooccurrence_relations(entities, text)
             relations.extend(cooccurrence_relations)
