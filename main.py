@@ -244,12 +244,13 @@ class OllamaPilotChat:
             traceback.print_exc()
             return False
     
-    def index_document(self, doc_path: str, doc_name: Optional[str] = None) -> bool:
+    def index_document(self, doc_path: str, doc_name: Optional[str] = None, async_mode: bool = True) -> bool:
         """手动索引文档或文件夹
         
         Args:
             doc_path: 文档路径或文件夹路径
             doc_name: 文档名称（可选，文件夹索引时忽略）
+            async_mode: 是否异步索引（默认True，不阻塞对话）
         """
         if not self.doc_manager:
             print("❌ 文档管理器未初始化（可能没有配置Embedding模型）")
@@ -259,7 +260,7 @@ class OllamaPilotChat:
         
         # 处理文件夹
         if path.is_dir():
-            return self._index_directory(doc_path)
+            return self._index_directory_async(doc_path) if async_mode else self._index_directory_sync(doc_path)
         
         # 处理单个文件
         if not doc_name:
@@ -273,26 +274,34 @@ class OllamaPilotChat:
                 auto_index=False
             )
             
-            print(f"🔄 开始索引（静默模式）...")
-            self.doc_manager.start_indexing(doc_id, silent=True)
-            
-            # 等待完成
-            success = self.doc_manager.wait_for_indexing(doc_id, timeout=300)
-            
-            if success:
-                doc_info = self.doc_manager.get_document_status(doc_id)
-                print(f"✅ 索引完成: {doc_info.chunks_count} 块, {doc_info.entities_count} 个实体")
+            if async_mode:
+                # 异步模式：后台索引，不阻塞
+                print(f"🔄 开始后台索引（您可以继续对话）...")
+                self.doc_manager.start_indexing(doc_id, silent=True)
+                print(f"   使用 /docs 查看索引进度")
+                return True
             else:
-                print(f"❌ 索引失败或超时")
-            
-            return success
+                # 同步模式：等待完成
+                print(f"🔄 开始索引（静默模式）...")
+                self.doc_manager.start_indexing(doc_id, silent=True)
+                success = self.doc_manager.wait_for_indexing(doc_id, timeout=300)
+                
+                if success:
+                    doc_info = self.doc_manager.get_document_status(doc_id)
+                    print(f"✅ 索引完成: {doc_info.chunks_count} 块, {doc_info.entities_count} 个实体")
+                else:
+                    print(f"❌ 索引失败或超时")
+                
+                return success
             
         except Exception as e:
             print(f"❌ 索引失败: {e}")
             return False
     
-    def _index_directory(self, dir_path: str) -> bool:
-        """索引整个文件夹"""
+    def _index_directory_async(self, dir_path: str) -> bool:
+        """异步索引整个文件夹（不阻塞对话）"""
+        import threading
+        
         print(f"\n📁 索引文件夹: {dir_path}")
         
         # 获取所有支持的文件
@@ -304,7 +313,7 @@ class OllamaPilotChat:
         
         print(f"  发现 {len(files)} 个文档")
         print("\n  文档列表:")
-        for i, file in enumerate(files[:10], 1):  # 只显示前10个
+        for i, file in enumerate(files[:10], 1):
             print(f"    {i}. {Path(file).name}")
         if len(files) > 10:
             print(f"    ... 还有 {len(files) - 10} 个文档")
@@ -315,7 +324,61 @@ class OllamaPilotChat:
             print("  已取消")
             return False
         
-        # 批量索引
+        # 后台异步索引
+        print(f"\n🔄 开始后台批量索引（您可以继续对话）...")
+        print(f"   使用 /docs 查看索引进度\n")
+        
+        def batch_index_worker():
+            success_count = 0
+            failed_count = 0
+            
+            for i, file_path in enumerate(files, 1):
+                file_name = Path(file_path).stem
+                
+                try:
+                    doc_id = self.doc_manager.register_document(
+                        doc_name=file_name,
+                        file_path=file_path,
+                        auto_index=False
+                    )
+                    
+                    self.doc_manager.start_indexing(doc_id, silent=True)
+                    success = self.doc_manager.wait_for_indexing(doc_id, timeout=300)
+                    
+                    if success:
+                        success_count += 1
+                    else:
+                        failed_count += 1
+                        
+                except Exception as e:
+                    failed_count += 1
+                    print(f"  ❌ [{file_name}] 错误: {e}")
+            
+            print(f"\n📊 批量索引完成: {success_count} 成功, {failed_count} 失败, 总计 {len(files)}")
+        
+        # 启动后台线程
+        thread = threading.Thread(target=batch_index_worker, daemon=True)
+        thread.start()
+        
+        return True
+    
+    def _index_directory_sync(self, dir_path: str) -> bool:
+        """同步索引整个文件夹（阻塞式，等待完成）"""
+        print(f"\n📁 索引文件夹: {dir_path}")
+        
+        files = self._get_files_in_directory(dir_path)
+        
+        if not files:
+            print(f"⚠️ 文件夹中没有支持的文档")
+            return False
+        
+        print(f"  发现 {len(files)} 个文档")
+        
+        confirm = input(f"\n是否索引这 {len(files)} 个文档? (y/n): ").strip().lower()
+        if confirm != 'y':
+            print("  已取消")
+            return False
+        
         success_count = 0
         failed_count = 0
         
