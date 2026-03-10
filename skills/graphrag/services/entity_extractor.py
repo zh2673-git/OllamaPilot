@@ -1,20 +1,18 @@
 """
-轻量级关键词提取器
+实体抽取器 - 基于规则 + 模式匹配
 
-基于 MiroFish 和 LangExtract 架构简化
 适合本地 Ollama 小模型环境
+能够建立实体关系和知识图谱
 """
 
 from typing import List, Dict, Optional, Set, Tuple
 import re
-import jieba
 from dataclasses import dataclass
-from collections import Counter
 
 
 @dataclass
-class ExtractedKeyword:
-    """提取的关键词"""
+class ExtractedEntity:
+    """抽取的实体"""
     name: str
     type: str
     start: int
@@ -24,14 +22,14 @@ class ExtractedKeyword:
 
 class LightweightEntityExtractor:
     """
-    轻量级关键词提取器
+    轻量级实体抽取器
 
-    不追求完整的知识图谱实体抽取，而是提取关键词用于增强检索
-    适合本地小模型环境
+    基于规则 + 模式匹配抽取实体
+    能够识别专业术语并建立关系
     """
 
     def __init__(self):
-        # 停用词
+        # 停用词 - 过滤常见虚词
         self.stopwords = set([
             '的', '了', '在', '是', '我', '有', '和', '就', '不', '人',
             '都', '一', '一个', '上', '也', '很', '到', '说', '要', '去',
@@ -46,154 +44,180 @@ class LightweightEntityExtractor:
             '从', '将', '对', '关于', '由于', '根据', '按照',
         ])
 
-        # 专业术语词典（可扩展）
-        self.domain_terms = {
-            # 中医相关
-            '中医病名': [
-                '太阳病', '阳明病', '少阳病', '太阴病', '少阴病', '厥阴病',
-                '中风', '伤寒', '温病', '风温', '湿温', '暑温',
-                '表证', '里证', '半表半里', '寒证', '热证', '虚证', '实证'
+        # 专业术语词典 - 用于精确匹配
+        self.entity_dict = {
+            # 中医病名
+            "病名": [
+                "太阳病", "阳明病", "少阳病", "太阴病", "少阴病", "厥阴病",
+                "中风", "伤寒", "温病", "风温", "湿温", "暑温",
+                "表证", "里证", "半表半里", "寒证", "热证", "虚证", "实证",
+                "太阳中风", "太阳伤寒", "阳明经证", "阳明腑证",
             ],
-            '中医方剂': [
-                '桂枝汤', '麻黄汤', '葛根汤', '小柴胡汤', '大柴胡汤',
-                '白虎汤', '承气汤', '四逆汤', '理中汤', '真武汤',
-                '五苓散', '小建中汤', '炙甘草汤', '四逆散'
+            # 中医方剂
+            "方剂": [
+                "桂枝汤", "麻黄汤", "葛根汤", "小柴胡汤", "大柴胡汤",
+                "白虎汤", "承气汤", "四逆汤", "理中汤", "真武汤",
+                "五苓散", "小建中汤", "炙甘草汤", "四逆散", "当归四逆汤",
+                "桂枝加葛根汤", "桂枝加厚朴杏子汤", "麻黄杏仁甘草石膏汤",
             ],
-            '中药名': [
-                '桂枝', '麻黄', '柴胡', '黄芩', '人参', '甘草', '大枣', '生姜',
-                '芍药', '半夏', '茯苓', '白术', '附子', '干姜', '细辛',
-                '黄连', '阿胶', '地黄', '麦冬', '五味子'
+            # 中药名
+            "中药": [
+                "桂枝", "麻黄", "柴胡", "黄芩", "人参", "甘草", "大枣", "生姜",
+                "芍药", "半夏", "茯苓", "白术", "附子", "干姜", "细辛",
+                "黄连", "阿胶", "地黄", "麦冬", "五味子", "当归", "川芎",
+                "杏仁", "石膏", "知母", "粳米", "厚朴", "枳实", "大黄",
+                "芒硝", "葛根", "天花粉", "牡蛎", "龙骨",
             ],
-            '中医术语': [
-                '脉浮', '脉紧', '脉缓', '脉细', '脉沉', '脉数',
-                '发热', '恶寒', '汗出', '无汗', '头痛', '身痛',
-                '呕吐', '下利', '腹满', '腹痛', '心悸', '烦躁',
-                '口苦', '咽干', '目眩', '耳聋', '胸胁苦满'
+            # 中医症状/体征
+            "症状": [
+                "脉浮", "脉紧", "脉缓", "脉细", "脉沉", "脉数", "脉弱",
+                "发热", "恶寒", "汗出", "无汗", "头痛", "身痛", "腰痛",
+                "呕吐", "下利", "腹满", "腹痛", "心悸", "烦躁", "失眠",
+                "口苦", "咽干", "目眩", "耳聋", "胸胁苦满", "往来寒热",
+                "项背强几几", "鼻鸣", "干呕", "喘", "咳", "渴",
             ],
-            '古代医家': [
-                '张仲景', '华佗', '扁鹊', '孙思邈', '李时珍'
+            # 中医治法
+            "治法": [
+                "发汗", "解表", "清热", "泻下", "温里", "补益", "和解",
+                "散寒", "生津", "止渴", "止呕", "止痛", "安神",
+            ],
+            # 古代医家
+            "医家": [
+                "张仲景", "华佗", "扁鹊", "孙思邈", "李时珍", "王叔和",
+            ],
+            # 中医经典
+            "经典": [
+                "伤寒论", "金匮要略", "黄帝内经", "神农本草经", "难经",
             ],
         }
 
-        # 合并所有专业术语
-        self.all_terms = set()
-        for terms in self.domain_terms.values():
-            self.all_terms.update(terms)
+        # 合并所有术语用于快速查找
+        self.all_terms = {}
+        for entity_type, terms in self.entity_dict.items():
+            for term in terms:
+                self.all_terms[term] = entity_type
 
-    def extract(
-        self,
-        text: str,
-        top_k: int = 10
-    ) -> List[ExtractedKeyword]:
+        # 模式匹配规则 - 用于识别未在词典中的实体
+        self.patterns = {
+            # 方剂模式：XX汤、XX散、XX丸
+            "方剂": r"[\u4e00-\u9fa5]{2,6}(?:汤|散|丸|膏|丹)",
+            # 症状模式：XX痛、XX满、XX呕
+            "症状": r"[\u4e00-\u9fa5]{1,4}(?:痛|满|呕|吐|利|渴|汗|热|寒|烦)",
+            # 脉象模式：脉XX
+            "症状": r"脉[\u4e00-\u9fa5]{1,3}",
+        }
+
+    def extract(self, text: str, top_k: int = 20) -> List[ExtractedEntity]:
         """
-        从文本中提取关键词
+        从文本中抽取实体
 
         Args:
             text: 输入文本
-            top_k: 返回前k个关键词
+            top_k: 最多返回的实体数
 
         Returns:
-            关键词列表
+            实体列表
         """
-        keywords = []
+        entities = []
+        found_positions = set()  # 记录已找到的位置，避免重叠
 
-        # 1. 专业术语匹配（高优先级）
-        for term_type, terms in self.domain_terms.items():
-            for term in terms:
-                for match in re.finditer(re.escape(term), text):
-                    keywords.append(ExtractedKeyword(
+        # 1. 词典精确匹配（高优先级）
+        for term, entity_type in self.all_terms.items():
+            for match in re.finditer(re.escape(term), text):
+                start, end = match.start(), match.end()
+                # 检查是否与已找到的实体重叠
+                if not self._is_overlapping(start, end, found_positions):
+                    entities.append(ExtractedEntity(
                         name=term,
-                        type=term_type,
-                        start=match.start(),
-                        end=match.end(),
+                        type=entity_type,
+                        start=start,
+                        end=end,
                         confidence=0.95
                     ))
+                    # 记录位置
+                    for i in range(start, end):
+                        found_positions.add(i)
 
-        # 2. 使用 jieba 分词提取关键词
-        try:
-            # 添加自定义词典
-            for term in self.all_terms:
-                jieba.add_word(term, freq=1000)
-
-            # 分词
-            words = jieba.lcut(text)
-
-            # 过滤停用词和单字
-            filtered_words = [
-                w for w in words
-                if len(w) > 1 and w not in self.stopwords and not w.isdigit()
-            ]
-
-            # 统计词频
-            word_counts = Counter(filtered_words)
-
-            # 选择高频词（排除已在专业术语中的）
-            existing_terms = {k.name for k in keywords}
-            for word, count in word_counts.most_common(top_k * 2):
-                if word not in existing_terms and len(keywords) < top_k * 2:
-                    # 找到词在文本中的位置
-                    for match in re.finditer(re.escape(word), text):
-                        keywords.append(ExtractedKeyword(
-                            name=word,
-                            type="关键词",
-                            start=match.start(),
-                            end=match.end(),
-                            confidence=min(0.5 + count * 0.05, 0.8)
+        # 2. 模式匹配（补充识别）
+        for entity_type, pattern in self.patterns.items():
+            for match in re.finditer(pattern, text):
+                start, end = match.start(), match.end()
+                term = text[start:end]
+                # 检查是否已存在或重叠
+                if term not in self.all_terms and not self._is_overlapping(start, end, found_positions):
+                    # 过滤停用词和太短的词
+                    if term not in self.stopwords and len(term) >= 2:
+                        entities.append(ExtractedEntity(
+                            name=term,
+                            type=entity_type,
+                            start=start,
+                            end=end,
+                            confidence=0.7
                         ))
-                        break  # 只取第一次出现的位置
+                        for i in range(start, end):
+                            found_positions.add(i)
 
-        except Exception as e:
-            # jieba 失败时，使用简单的空格分词
-            words = text.split()
-            for word in words:
-                if len(word) > 1 and word not in self.stopwords:
-                    for match in re.finditer(re.escape(word), text):
-                        keywords.append(ExtractedKeyword(
-                            name=word,
-                            type="关键词",
-                            start=match.start(),
-                            end=match.end(),
-                            confidence=0.5
-                        ))
-                        break
+        # 3. 去重和排序
+        entities = self._deduplicate(entities)
+        entities.sort(key=lambda e: (e.confidence, len(e.name)), reverse=True)
 
-        # 去重和排序
-        keywords = self._deduplicate(keywords)
-        keywords.sort(key=lambda k: (k.confidence, len(k.name)), reverse=True)
+        return entities[:top_k]
 
-        # 返回前 top_k 个
-        return keywords[:top_k]
-
-    def extract_from_query(self, text: str) -> List[Dict[str, str]]:
+    def extract_with_context(self, text: str, window_size: int = 50) -> List[Dict]:
         """
-        从查询中提取关键词（简化格式）
+        抽取实体并附带上下文
 
         Args:
-            text: 查询文本
+            text: 输入文本
+            window_size: 上下文窗口大小
 
         Returns:
-            关键词字典列表
+            带上下文的实体列表
         """
-        keywords = self.extract(text, top_k=5)
-        return [{"name": k.name, "type": k.type} for k in keywords]
+        entities = self.extract(text)
+        result = []
 
-    def _deduplicate(self, keywords: List[ExtractedKeyword]) -> List[ExtractedKeyword]:
+        for entity in entities:
+            # 提取上下文
+            start = max(0, entity.start - window_size)
+            end = min(len(text), entity.end + window_size)
+            context = text[start:end]
+
+            result.append({
+                "name": entity.name,
+                "type": entity.type,
+                "position": (entity.start, entity.end),
+                "confidence": entity.confidence,
+                "context": context
+            })
+
+        return result
+
+    def _is_overlapping(self, start: int, end: int, found_positions: Set[int]) -> bool:
+        """检查位置是否与已找到的实体重叠"""
+        for i in range(start, end):
+            if i in found_positions:
+                return True
+        return False
+
+    def _deduplicate(self, entities: List[ExtractedEntity]) -> List[ExtractedEntity]:
         """去重：优先保留置信度高的"""
-        seen: Dict[str, ExtractedKeyword] = {}
-        for k in keywords:
-            if k.name not in seen or k.confidence > seen[k.name].confidence:
-                seen[k.name] = k
+        seen = {}
+        for e in entities:
+            if e.name not in seen or e.confidence > seen[e.name].confidence:
+                seen[e.name] = e
         return list(seen.values())
 
-    def add_domain_terms(self, term_type: str, terms: List[str]):
-        """添加领域术语"""
-        if term_type not in self.domain_terms:
-            self.domain_terms[term_type] = []
-        self.domain_terms[term_type].extend(terms)
-        self.domain_terms[term_type] = list(set(self.domain_terms[term_type]))
-        self.all_terms.update(terms)
+    def add_entity_type(self, entity_type: str, terms: List[str]):
+        """添加新的实体类型"""
+        if entity_type not in self.entity_dict:
+            self.entity_dict[entity_type] = []
+        self.entity_dict[entity_type].extend(terms)
+        self.entity_dict[entity_type] = list(set(self.entity_dict[entity_type]))
+        for term in terms:
+            self.all_terms[term] = entity_type
 
-    def load_domain_dictionary(self, dictionary: Dict[str, List[str]]):
-        """加载领域词典"""
-        for term_type, terms in dictionary.items():
-            self.add_domain_terms(term_type, terms)
+    def load_dictionary(self, dictionary: Dict[str, List[str]]):
+        """加载词典"""
+        for entity_type, terms in dictionary.items():
+            self.add_entity_type(entity_type, terms)

@@ -6,7 +6,7 @@ GraphRAG 服务模块
 
 from skills.graphrag.services.graphrag_service import GraphRAGService, Entity, Relation
 from skills.graphrag.services.ontology_generator import OntologyGenerator
-from skills.graphrag.services.entity_extractor import LightweightEntityExtractor, ExtractedKeyword
+from skills.graphrag.services.entity_extractor import LightweightEntityExtractor, ExtractedEntity
 
 __all__ = [
     "GraphRAGService",
@@ -14,5 +14,5 @@ __all__ = [
     "Relation",
     "OntologyGenerator",
     "LightweightEntityExtractor",
-    "ExtractedKeyword",
+    "ExtractedEntity",
 ]
