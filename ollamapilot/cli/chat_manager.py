@@ -7,6 +7,7 @@
 import sys
 import uuid
 import glob
+import time
 import threading
 from pathlib import Path
 from datetime import datetime
@@ -374,7 +375,6 @@ class OllamaPilotChat:
 
                 # 计算时间预估
                 if doc.started_at and current_chunk > 0:
-                    import time
                     elapsed = time.time() - doc.started_at
                     avg_time_per_chunk = elapsed / current_chunk
                     remaining_chunks = doc.chunks_count - current_chunk
