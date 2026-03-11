@@ -207,7 +207,8 @@ class HybridEntityExtractor:
         use_llm: bool = True,
         llm_client = None,
         batch_size: int = 5,
-        top_k: int = 20
+        top_k: int = 20,
+        progress_callback = None
     ) -> List[Tuple[List[ExtractedEntity], List[ExtractedRelation]]]:
         """
         批量抽取实体和关系
@@ -220,16 +221,22 @@ class HybridEntityExtractor:
             llm_client: LLM客户端
             batch_size: 每批处理的块数（默认5）
             top_k: 每块最多返回的实体数
+            progress_callback: 进度回调函数(batch_index, total_batches)
 
         Returns:
             每块的(实体列表, 关系列表)
         """
         results = []
+        total_batches = (len(chunks) + batch_size - 1) // batch_size
 
         # 按批次处理
-        for batch_start in range(0, len(chunks), batch_size):
+        for batch_idx, batch_start in enumerate(range(0, len(chunks), batch_size)):
             batch_end = min(batch_start + batch_size, len(chunks))
             batch_chunks = chunks[batch_start:batch_end]
+
+            # 调用进度回调
+            if progress_callback:
+                progress_callback(batch_idx + 1, total_batches, batch_start, len(chunks))
 
             # 如果只有一个块，直接处理
             if len(batch_chunks) == 1:

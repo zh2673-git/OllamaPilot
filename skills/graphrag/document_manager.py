@@ -340,19 +340,29 @@ class DocumentManager:
 
             # 使用批量抽取（每批5个块）
             batch_size = 5
+            batch_results = []
+
+            # 定义批量进度回调
+            def batch_progress_callback(batch_idx, total_batches, batch_start, total_chunks):
+                # 计算实际处理的块数
+                current_chunk = min(batch_start + batch_size, total_chunks)
+                chunk_progress = 0.35 + (0.6 * current_chunk / total_chunks)
+                progress_callback(chunk_progress, f"处理块 {current_chunk}/{total_chunks} (批次 {batch_idx}/{total_batches})...")
+                # 保存注册表以更新进度
+                self._save_document_registry()
+
+            # 批量抽取，带进度回调
             batch_results = entity_extractor.extract_batch(
                 chunks,
                 use_llm=use_llm,
                 llm_client=llm_client,
                 batch_size=batch_size,
-                top_k=20
+                top_k=20,
+                progress_callback=batch_progress_callback
             )
 
             # 处理批量结果
             for i, (entities, relations) in enumerate(batch_results):
-                chunk_progress = 0.35 + (0.6 * (i + 1) / len(chunks))
-                progress_callback(chunk_progress, f"处理块 {i+1}/{len(chunks)}...")
-
                 total_entities += len(entities)
                 total_relations += len(relations)
 
