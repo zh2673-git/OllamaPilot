@@ -57,7 +57,7 @@ class DocumentManager:
         base_persist_dir: str = "./data/graphrag",
         embedding_model: Optional[str] = None,
         progress_callback: Optional[Callable[[str, float, str], None]] = None,
-        batch_size: int = 10
+        batch_size: int = 20
     ):
         """
         初始化文档管理器
@@ -66,7 +66,7 @@ class DocumentManager:
             base_persist_dir: 基础持久化目录
             embedding_model: Embedding模型名称
             progress_callback: 进度回调函数(doc_id, progress, message)
-            batch_size: 批量处理大小（默认10，可配置）
+            batch_size: 批量处理大小（默认20，可配置）
         """
         self.base_persist_dir = Path(base_persist_dir)
         self.base_persist_dir.mkdir(parents=True, exist_ok=True)

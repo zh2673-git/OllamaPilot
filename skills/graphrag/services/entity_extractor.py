@@ -313,8 +313,8 @@ class HybridEntityExtractor:
         prompt = self._build_batch_extraction_prompt(chunks)
 
         try:
-            # 调用LLM（使用稍长的超时，因为处理多个块）
-            response = llm_client.generate(prompt, timeout=180, silent=True)
+            # 调用LLM（使用较长的超时，因为处理多个块，20个块约需3-5分钟）
+            response = llm_client.generate(prompt, timeout=300, silent=True)
 
             if not response:
                 # LLM失败，返回词典匹配结果
