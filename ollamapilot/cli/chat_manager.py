@@ -243,39 +243,42 @@ class OllamaPilotChat:
             return False
         
         print(f"\n🔄 开始后台批量索引（您可以继续对话）...")
-        print(f"   使用 /docs 查看索引进度\n")
-        
+        print(f"   使用 /docs 查看实时进度\n")
+
         def batch_index_worker():
-            success_count = 0
-            failed_count = 0
-            
+            doc_ids = []
+
+            # 注册所有文档
             for i, file_path in enumerate(files, 1):
                 file_name = Path(file_path).stem
-                
+
                 try:
                     doc_id = self.doc_manager.register_document(
                         doc_name=file_name,
                         file_path=file_path,
                         auto_index=False
                     )
-                    
-                    self.doc_manager.start_indexing(doc_id, silent=True)
-                    success = self.doc_manager.wait_for_indexing(doc_id, timeout=300)
-                    
-                    if success:
-                        success_count += 1
-                    else:
-                        failed_count += 1
-                        
+                    doc_ids.append((doc_id, file_name))
+                    print(f"  📄 已注册: {file_name}")
+
                 except Exception as e:
-                    failed_count += 1
-                    print(f"  ❌ [{file_name}] 错误: {e}")
-            
-            print(f"\n📊 批量索引完成: {success_count} 成功, {failed_count} 失败, 总计 {len(files)}")
-        
+                    print(f"  ❌ [{file_name}] 注册失败: {e}")
+
+            # 启动所有索引（不等待）
+            for doc_id, file_name in doc_ids:
+                try:
+                    self.doc_manager.start_indexing(doc_id, silent=True)
+                    print(f"  🔄 开始索引: {file_name}")
+                except Exception as e:
+                    print(f"  ❌ [{file_name}] 启动失败: {e}")
+
+            # 显示启动完成提示
+            print(f"\n✅ 已启动 {len(doc_ids)} 个文档的后台索引")
+            print(f"   使用 /docs 随时查看进度\n")
+
         thread = threading.Thread(target=batch_index_worker, daemon=True)
         thread.start()
-        
+
         return True
     
     def _index_directory_sync(self, dir_path: str) -> bool:
@@ -359,13 +362,26 @@ class OllamaPilotChat:
                 "completed": "✅",
                 "failed": "❌"
             }.get(doc.status.value, "❓")
-            
+
             print(f"{status_icon} {doc.name}")
             print(f"   ID: {doc.doc_id}")
-            print(f"   状态: {doc.status.value}")
+
+            # 显示详细进度
+            if doc.status.value == "running" and doc.chunks_count > 0:
+                # 计算当前处理的块数
+                current_chunk = int(doc.progress * doc.chunks_count)
+                print(f"   状态: 索引中 ({current_chunk}/{doc.chunks_count} 块, {doc.progress*100:.0f}%)")
+            else:
+                print(f"   状态: {doc.status.value}")
+
             print(f"   模型: {doc.model_name}")
+
             if doc.chunks_count > 0:
                 print(f"   分块: {doc.chunks_count}, 实体: {doc.entities_count}")
+
+            if doc.message and doc.status.value == "running":
+                print(f"   进度: {doc.message}")
+
             print("-" * 70)
     
     def switch_model(self, model_name: str) -> bool:
