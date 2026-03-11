@@ -130,12 +130,9 @@ class HybridEntityExtractor:
         }
 
     def _save_dictionary(self):
-        """保存词典到文件"""
-        try:
-            with open(self.dictionary_path, 'w', encoding='utf-8') as f:
-                json.dump(self.entity_dict, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"⚠️ 保存词典失败: {e}")
+        """保存词典到文件（已弃用，使用 DictionaryManager）"""
+        # 词典现在由 DictionaryManager 管理，此方法保留用于兼容性
+        pass
 
     def _rebuild_index(self):
         """重建快速查找索引"""
@@ -810,5 +807,5 @@ class HybridEntityExtractor:
             "total_entities": len(self.all_terms),
             "entity_types": list(self.entity_dict.keys()),
             "type_counts": {k: len(v) for k, v in self.entity_dict.items()},
-            "dictionary_path": str(self.dictionary_path)
+            "doc_dictionary_path": str(self.doc_dictionary_path) if self.doc_dictionary_path else None
         }
