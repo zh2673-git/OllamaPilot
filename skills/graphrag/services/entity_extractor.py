@@ -2,6 +2,7 @@
 混合模式实体抽取器
 
 结合词典匹配 + LLM抽取，支持动态学习和人工干预
+集成全局预设词典和文档私有词典
 """
 
 from typing import List, Dict, Optional, Set, Tuple, Any
@@ -36,31 +37,55 @@ class HybridEntityExtractor:
     混合模式实体抽取器
 
     工作流程：
-    1. 词典匹配（快速、高置信度）
-    2. LLM抽取（智能、发现新实体）
-    3. 合并结果（去重、排序）
-    4. 动态学习（新实体加入词典）
+    1. 加载全局预设词典 + 文档私有词典
+    2. 词典匹配（快速、高置信度）
+    3. LLM抽取（智能、发现新实体）
+    4. 合并结果（去重、排序）
+    5. 动态学习（新实体加入文档私有词典）
 
-    支持人工干预：
-    - 导出词典 → 用更强模型优化 → 导入更新
+    词典架构：
+    - 全局预设词典：config/dictionaries/（用户维护，只读）
+    - 文档私有词典：data/graphrag/{doc_id}/dictionary.json（LLM学习，可写）
     """
 
-    def __init__(self, persist_dir: str = "./data/graphrag"):
+    def __init__(
+        self,
+        persist_dir: str = "./data/graphrag",
+        doc_id: Optional[str] = None,
+        selected_dictionaries: Optional[List[str]] = None
+    ):
         """
         初始化抽取器
 
         Args:
             persist_dir: 词典持久化目录
+            doc_id: 文档ID（用于加载文档私有词典）
+            selected_dictionaries: 选择的全局词典列表，None表示全部
         """
         self.persist_dir = Path(persist_dir)
         self.persist_dir.mkdir(parents=True, exist_ok=True)
-        self.dictionary_path = self.persist_dir / "entity_dictionary.json"
+        self.doc_id = doc_id
 
         # 停用词
         self.stopwords = self._load_stopwords()
 
-        # 加载或初始化词典
-        self.entity_dict = self._load_dictionary()
+        # 加载词典管理器
+        from skills.graphrag.dictionary_manager import get_dictionary_manager
+        self.dict_manager = get_dictionary_manager()
+
+        # 确定要加载的全局词典
+        if selected_dictionaries is None:
+            # 默认加载所有全局词典
+            selected_dictionaries = self.dict_manager.list_global_dictionaries()
+        self.selected_dictionaries = selected_dictionaries
+
+        # 文档私有词典路径
+        self.doc_dictionary_path = None
+        if doc_id:
+            self.doc_dictionary_path = self.persist_dir / doc_id / "dictionary.json"
+
+        # 加载合并后的词典
+        self.entity_dict = self._load_merged_dictionary()
 
         # 构建快速查找索引
         self._rebuild_index()
@@ -74,54 +99,34 @@ class HybridEntityExtractor:
             '之', '与', '及', '等', '或', '但', '而', '因为', '所以',
         ])
 
-    def _load_dictionary(self) -> Dict[str, List[str]]:
-        """从文件加载词典，不存在则初始化"""
-        if self.dictionary_path.exists():
-            try:
-                with open(self.dictionary_path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except Exception as e:
-                print(f"⚠️ 加载词典失败: {e}，使用默认词典")
+    def _load_merged_dictionary(self) -> Dict[str, List[str]]:
+        """
+        加载合并后的词典
 
-        # 默认词典（通用实体类型）
-        # 参考v0.1.3，包含更多常见实体，减少规则匹配的误匹配
+        合并顺序：
+        1. 全局预设词典（用户维护，只读）
+        2. 文档私有词典（LLM学习，可写）
+        """
+        # 使用词典管理器加载合并后的词典
+        merged = self.dict_manager.get_merged_dictionary(
+            doc_dictionary_path=self.doc_dictionary_path,
+            selected_globals=self.selected_dictionaries
+        )
+
+        # 如果合并后的词典为空，使用默认词典
+        if not merged:
+            print("⚠️ 未找到全局词典，使用默认词典")
+            return self._get_default_dictionary()
+
+        print(f"📚 已加载 {len(merged)} 类实体，共 {sum(len(v) for v in merged.values())} 个词条")
+        return merged
+
+    def _get_default_dictionary(self) -> Dict[str, List[str]]:
+        """获取默认词典（备用）"""
         return {
-            "人名": [
-                # 常见中文姓名（参考v0.1.3）
-                "张三", "李四", "王五", "赵六", "孙七", "周八", "吴九", "郑十",
-                "张伟", "李娜", "王强", "刘洋", "陈明", "杨华", "黄丽", "赵军",
-                "小明", "小红", "老王", "老李", "老张",
-            ],
-            "组织": [
-                # 常见组织和公司（参考v0.1.3）
-                "腾讯", "阿里巴巴", "百度", "字节跳动", "华为", "小米", "京东",
-                "公司", "集团", "大学", "学院", "研究所", "医院", "银行",
-                "学校", "政府", "部门", "协会", "基金会", "联盟",
-            ],
-            "地点": [
-                # 常见地点（参考v0.1.3）
-                "北京", "上海", "广州", "深圳", "杭州", "成都", "武汉", "西安",
-                "南京", "天津", "重庆", "苏州", "郑州", "长沙", "沈阳",
-                "中国", "美国", "日本", "德国", "法国", "英国", "俄罗斯",
-                "亚洲", "欧洲", "北美", "非洲", "大洋洲",
-            ],
-            "产品": [
-                # 常见产品（参考v0.1.3）
-                "iPhone", "iPad", "MacBook", "Windows", "Android",
-                "微信", "支付宝", "QQ", "淘宝", "京东",
-            ],
-            "时间": [
-                # 时间单位
-                "年", "月", "日", "时", "分", "秒", "周", "季度", "世纪",
-                "春天", "夏天", "秋天", "冬天", "上午", "下午", "晚上",
-            ],
-            "数值": [
-                # 数值单位
-                "个", "十", "百", "千", "万", "亿", "兆",
-                "米", "千米", "克", "千克", "升", "毫升", "度", "百分比",
-            ],
-            "概念": [],
-            "事件": [],
+            "人名": ["张三", "李四", "王五"],
+            "组织": ["公司", "集团"],
+            "地点": ["北京", "上海"],
         }
 
     def _save_dictionary(self):
@@ -437,24 +442,31 @@ class HybridEntityExtractor:
             return {"entities": [], "relations": []}
 
     def _learn_from_llm(self, llm_entities: List[ExtractedEntity]):
-        """从LLM抽取结果中学习，更新词典"""
-        updated = False
+        """从LLM抽取结果中学习，更新文档私有词典"""
+        if not self.doc_id:
+            # 如果没有文档ID，不保存学习结果
+            return
+
+        new_entities: Dict[str, List[str]] = {}
 
         for entity in llm_entities:
             if entity.source == "llm" and entity.confidence > 0.7:
                 # 新类型
-                if entity.type not in self.entity_dict:
-                    self.entity_dict[entity.type] = []
+                if entity.type not in new_entities:
+                    new_entities[entity.type] = []
 
                 # 新实体
-                if entity.name not in self.entity_dict[entity.type]:
-                    self.entity_dict[entity.type].append(entity.name)
-                    self.all_terms[entity.name] = entity.type
-                    updated = True
+                if entity.name not in new_entities[entity.type]:
+                    new_entities[entity.type].append(entity.name)
 
-        if updated:
-            self._save_dictionary()
-            print(f"📝 词典已更新，当前包含 {len(self.all_terms)} 个实体")
+        if new_entities:
+            # 更新文档私有词典
+            self.dict_manager.update_document_dictionary(
+                doc_id=self.doc_id,
+                new_entities=new_entities,
+                persist_dir=str(self.persist_dir)
+            )
+            print(f"📝 文档词典已更新，新增 {sum(len(v) for v in new_entities.values())} 个实体")
 
     def _infer_cooccurrence_relations(
         self,

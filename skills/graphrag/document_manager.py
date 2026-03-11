@@ -299,8 +299,11 @@ class DocumentManager:
                 embedding_model=doc_info.model_name
             )
 
-            # 初始化混合实体抽取器（自动加载已有词典）
-            entity_extractor = HybridEntityExtractor(persist_dir=str(storage_path))
+            # 初始化混合实体抽取器（加载全局预设词典 + 文档私有词典）
+            entity_extractor = HybridEntityExtractor(
+                persist_dir=str(storage_path),
+                doc_id=doc_id
+            )
 
             # 初始化LLM客户端（用于动态学习）
             llm_client = SimpleLLMClient(model_name="qwen3.5:4b")
