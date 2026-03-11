@@ -746,7 +746,8 @@ class OllamaPilotChat:
         if indexing_count > 0:
             print(f"\n⏳ 检测到 {indexing_count} 个文档正在后台索引...")
             print(f"   使用 /docs 查看进度")
-            print(f"   索引期间对话可能响应较慢\n")
+            print(f"   索引期间无法对话，请等待索引完成\n")
+            return
 
         # 更新会话统计
         if self.current_session_id in self.sessions:
