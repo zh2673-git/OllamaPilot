@@ -195,6 +195,247 @@ class HybridEntityExtractor:
             cooccurrence_relations = self._infer_cooccurrence_relations(entities, text)
             relations.extend(cooccurrence_relations)
 
+        # 限制数量
+        entities = entities[:top_k]
+        relations = relations[:top_k]
+
+        return entities, relations
+
+    def extract_batch(
+        self,
+        chunks: List[str],
+        use_llm: bool = True,
+        llm_client = None,
+        batch_size: int = 5,
+        top_k: int = 20
+    ) -> List[Tuple[List[ExtractedEntity], List[ExtractedRelation]]]:
+        """
+        批量抽取实体和关系
+
+        将多个文本块合并，一次性调用LLM，减少API调用次数
+
+        Args:
+            chunks: 文本块列表
+            use_llm: 是否使用LLM补充抽取
+            llm_client: LLM客户端
+            batch_size: 每批处理的块数（默认5）
+            top_k: 每块最多返回的实体数
+
+        Returns:
+            每块的(实体列表, 关系列表)
+        """
+        results = []
+
+        # 按批次处理
+        for batch_start in range(0, len(chunks), batch_size):
+            batch_end = min(batch_start + batch_size, len(chunks))
+            batch_chunks = chunks[batch_start:batch_end]
+
+            # 如果只有一个块，直接处理
+            if len(batch_chunks) == 1:
+                entities, relations = self.extract(
+                    batch_chunks[0],
+                    use_llm=use_llm,
+                    llm_client=llm_client,
+                    top_k=top_k
+                )
+                results.append((entities, relations))
+                continue
+
+            # 多个块，批量处理
+            if use_llm and llm_client:
+                # 批量LLM抽取
+                batch_results = self._extract_batch_with_llm(
+                    batch_chunks, llm_client, top_k
+                )
+                results.extend(batch_results)
+            else:
+                # 不用LLM，逐个处理
+                for chunk in batch_chunks:
+                    entities, relations = self.extract(
+                        chunk,
+                        use_llm=False,
+                        llm_client=None,
+                        top_k=top_k
+                    )
+                    results.append((entities, relations))
+
+        return results
+
+    def _extract_batch_with_llm(
+        self,
+        chunks: List[str],
+        llm_client,
+        top_k: int = 20
+    ) -> List[Tuple[List[ExtractedEntity], List[ExtractedRelation]]]:
+        """
+        使用LLM批量抽取多个文本块
+
+        Args:
+            chunks: 文本块列表（2-5个）
+            llm_client: LLM客户端
+            top_k: 每块最多返回的实体数
+
+        Returns:
+            每块的(实体列表, 关系列表)
+        """
+        results = []
+
+        # 先进行词典匹配（每块独立）
+        for chunk in chunks:
+            entities = []
+            relations = []
+            found_positions = set()
+
+            # 词典匹配
+            dict_entities = self._extract_from_dictionary(chunk, found_positions)
+            entities.extend(dict_entities)
+
+            # 规则匹配
+            pattern_entities = self._extract_with_patterns(chunk, found_positions)
+            entities.extend(pattern_entities)
+
+            results.append((entities, relations, found_positions, chunk))
+
+        # 构建批量提示词
+        prompt = self._build_batch_extraction_prompt(chunks)
+
+        try:
+            # 调用LLM（使用稍长的超时，因为处理多个块）
+            response = llm_client.generate(prompt, timeout=180, silent=True)
+
+            if not response:
+                # LLM失败，返回词典匹配结果
+                return [(e, r) for e, r, _, _ in results]
+
+            # 解析批量结果
+            batch_results = self._parse_batch_llm_response(response, chunks)
+
+            # 合并结果
+            final_results = []
+            for i, (dict_entities, _, found_positions, chunk) in enumerate(results):
+                llm_entities = batch_results.get(i, {}).get("entities", [])
+                llm_relations = batch_results.get(i, {}).get("relations", [])
+
+                entities = list(dict_entities)  # 复制词典匹配结果
+
+                # 处理LLM抽取的实体
+                for entity_data in llm_entities:
+                    name = entity_data.get("name", "")
+                    if name and name not in self.all_terms:
+                        for match in re.finditer(re.escape(name), chunk):
+                            start, end = match.start(), match.end()
+                            if not self._is_overlapping(start, end, found_positions):
+                                entities.append(ExtractedEntity(
+                                    name=name,
+                                    type=entity_data.get("type", "未知"),
+                                    start=start,
+                                    end=end,
+                                    confidence=entity_data.get("confidence", 0.7),
+                                    source="llm"
+                                ))
+                                for pos in range(start, end):
+                                    found_positions.add(pos)
+                                break
+
+                # 处理关系
+                relations = [
+                    ExtractedRelation(
+                        source=r.get("source", ""),
+                        target=r.get("target", ""),
+                        relation=r.get("relation", "RELATED"),
+                        confidence=r.get("confidence", 0.6)
+                    )
+                    for r in llm_relations
+                ]
+
+                # 动态学习
+                llm_entity_objects = [e for e in entities if e.source == "llm"]
+                self._learn_from_llm(llm_entity_objects)
+
+                # 去重和排序
+                entities = self._deduplicate_entities(entities)
+                entities.sort(key=lambda e: (e.confidence, len(e.name)), reverse=True)
+
+                # 推断共现关系
+                if len(relations) < 3 and len(entities) > 1:
+                    cooccurrence = self._infer_cooccurrence_relations(entities, chunk)
+                    relations.extend(cooccurrence)
+
+                final_results.append((entities[:top_k], relations[:top_k]))
+
+            return final_results
+
+        except Exception as e:
+            # 出错时返回词典匹配结果
+            return [(e, r) for e, r, _, _ in results]
+
+    def _build_batch_extraction_prompt(self, chunks: List[str]) -> str:
+        """构建批量实体抽取提示词"""
+        prompt_parts = [
+            "你是一个专业的实体抽取助手。请从以下文本块中抽取实体和关系。",
+            "",
+            "要求：",
+            "1. 对每个文本块分别抽取",
+            "2. 实体类型包括：人名、组织、地点、病症、方剂、药物、症状、穴位、治法、法律、法规等",
+            "3. 关系类型包括：组成、治疗、引起、属于、位于等",
+            "4. 返回JSON格式",
+            "",
+            f"共 {len(chunks)} 个文本块：",
+            ""
+        ]
+
+        for i, chunk in enumerate(chunks):
+            prompt_parts.append(f"--- 文本块 {i+1} ---")
+            prompt_parts.append(chunk[:500])  # 限制长度
+            prompt_parts.append("")
+
+        prompt_parts.extend([
+            "请返回以下JSON格式：",
+            "{",
+            '  "results": [',
+            "    {",
+            '      "block_index": 0,',
+            '      "entities": [',
+            '        {"name": "实体名", "type": "类型", "confidence": 0.9}',
+            "      ],",
+            '      "relations": [',
+            '        {"source": "实体1", "target": "实体2", "relation": "关系", "confidence": 0.8}',
+            "      ]",
+            "    }",
+            "  ]",
+            "}"
+        ])
+
+        return "\n".join(prompt_parts)
+
+    def _parse_batch_llm_response(self, response: str, chunks: List[str]) -> Dict[int, Dict]:
+        """解析批量LLM响应"""
+        import json
+        import re
+
+        try:
+            # 提取JSON
+            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+            if json_match:
+                data = json.loads(json_match.group())
+                results = data.get("results", [])
+
+                # 转换为字典
+                batch_results = {}
+                for result in results:
+                    block_index = result.get("block_index", 0)
+                    batch_results[block_index] = {
+                        "entities": result.get("entities", []),
+                        "relations": result.get("relations", [])
+                    }
+                return batch_results
+        except Exception:
+            pass
+
+        # 解析失败，返回空结果
+        return {i: {"entities": [], "relations": []} for i in range(len(chunks))}
+
         return entities[:top_k], relations
 
     def _extract_from_dictionary(

@@ -331,24 +331,28 @@ class DocumentManager:
             progress_callback(0.3, f"分块完成: {len(chunks)} 块")
             logger.info(f"[{doc_info.name}] 文档分块完成: {len(chunks)} 块")
 
-            # 处理每个块
+            # 处理每个块（使用批量抽取优化）
             progress_callback(0.35, "开始向量化和实体抽取...")
-            logger.info(f"[{doc_info.name}] 开始处理 {len(chunks)} 个块")
+            logger.info(f"[{doc_info.name}] 开始处理 {len(chunks)} 个块（批量模式，每批5个）")
 
             total_entities = 0
             total_relations = 0
 
-            for i, chunk in enumerate(chunks):
+            # 使用批量抽取（每批5个块）
+            batch_size = 5
+            batch_results = entity_extractor.extract_batch(
+                chunks,
+                use_llm=use_llm,
+                llm_client=llm_client,
+                batch_size=batch_size,
+                top_k=20
+            )
+
+            # 处理批量结果
+            for i, (entities, relations) in enumerate(batch_results):
                 chunk_progress = 0.35 + (0.6 * (i + 1) / len(chunks))
                 progress_callback(chunk_progress, f"处理块 {i+1}/{len(chunks)}...")
 
-                # 使用混合模式抽取实体和关系
-                entities, relations = entity_extractor.extract(
-                    chunk,
-                    use_llm=use_llm,
-                    llm_client=llm_client,
-                    top_k=20
-                )
                 total_entities += len(entities)
                 total_relations += len(relations)
 
@@ -373,7 +377,7 @@ class DocumentManager:
                 }
 
                 graph_service.add_document(
-                    text=chunk,
+                    text=chunks[i],
                     doc_id=chunk_doc_id,
                     metadata=metadata,
                     entities=entity_objects
