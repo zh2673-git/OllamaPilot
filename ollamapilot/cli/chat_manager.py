@@ -736,22 +736,38 @@ class OllamaPilotChat:
         return True
     
     def chat(self, user_input: str):
-        """处理用户输入并获取回复"""
+        """处理用户输入并获取回复（带超时保护）"""
         if not self.agent:
             print("❌ Agent 未初始化")
             return
-        
+
+        # 检查是否有正在进行的索引任务
+        indexing_count = len(self.doc_manager._indexing_tasks)
+        if indexing_count > 0:
+            print(f"\n⏳ 检测到 {indexing_count} 个文档正在后台索引...")
+            print(f"   使用 /docs 查看进度")
+            print(f"   索引期间对话可能响应较慢\n")
+
         # 更新会话统计
         if self.current_session_id in self.sessions:
             self.sessions[self.current_session_id].increment_message()
-        
+
         print("\n助手: ", end="", flush=True)
-        
+
         full_response = ""
         has_output = False
-        
+        start_time = time.time()
+        timeout = 30  # 30秒超时
+
         try:
             for chunk in self.agent.stream(user_input, thread_id=self.current_session_id):
+                # 检查超时
+                if time.time() - start_time > timeout:
+                    print("\n\n⏰ 响应超时，可能正在索引中...")
+                    print(f"   使用 /docs 查看索引进度")
+                    print(f"   索引完成后对话将恢复正常\n")
+                    return
+
                 if isinstance(chunk, dict):
                     content = None
                     if "messages" in chunk:
@@ -764,14 +780,14 @@ class OllamaPilotChat:
                         messages = chunk["agent"]["messages"]
                         if messages and hasattr(messages[-1], "content"):
                             content = messages[-1].content
-                    
+
                     if content and len(content) > len(full_response):
                         new_text = content[len(full_response):]
                         if new_text.strip():
                             print(new_text, end="", flush=True)
                             has_output = True
                         full_response = content
-            
+
             if has_output:
                 print("\n")
             else:
@@ -781,7 +797,7 @@ class OllamaPilotChat:
                     print(f"{response}\n")
                 else:
                     print("（无回答）\n")
-                    
+
         except Exception as e:
             print(f"\n⚠️ 流式输出失败，使用普通模式: {e}\n")
             try:
