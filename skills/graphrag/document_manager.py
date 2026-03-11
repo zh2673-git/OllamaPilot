@@ -38,6 +38,7 @@ class DocumentInfo:
     progress: float = 0.0
     message: str = ""
     created_at: float = 0.0
+    started_at: Optional[float] = None  # 索引开始时间
     completed_at: Optional[float] = None
 
 
@@ -214,6 +215,7 @@ class DocumentManager:
         doc_info.status = IndexingStatus.RUNNING
         doc_info.progress = 0.0
         doc_info.message = "开始索引..."
+        doc_info.started_at = time.time()  # 记录开始时间
         
         thread = threading.Thread(
             target=self._index_document_worker,
@@ -347,6 +349,9 @@ class DocumentManager:
                 total_entities += len(entities)
                 total_relations += len(relations)
 
+                # 实时更新实体数（让用户可以通过 /docs 查看进度）
+                doc_info.entities_count = total_entities
+
                 # 添加到图谱
                 chunk_doc_id = f"{doc_id}_{i}"
                 from skills.graphrag.services import Entity
@@ -438,6 +443,7 @@ class DocumentManager:
                         progress=doc_data.get("progress", 0.0),
                         message=doc_data.get("message", ""),
                         created_at=doc_data.get("created_at", 0.0),
+                        started_at=doc_data.get("started_at"),
                         completed_at=doc_data.get("completed_at")
                     )
             except Exception as e:
@@ -462,6 +468,7 @@ class DocumentManager:
                 "progress": doc_info.progress,
                 "message": doc_info.message,
                 "created_at": doc_info.created_at,
+                "started_at": doc_info.started_at,
                 "completed_at": doc_info.completed_at
             }
         

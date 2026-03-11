@@ -371,6 +371,24 @@ class OllamaPilotChat:
                 # 计算当前处理的块数
                 current_chunk = int(doc.progress * doc.chunks_count)
                 print(f"   状态: 索引中 ({current_chunk}/{doc.chunks_count} 块, {doc.progress*100:.0f}%)")
+
+                # 计算时间预估
+                if doc.started_at and current_chunk > 0:
+                    import time
+                    elapsed = time.time() - doc.started_at
+                    avg_time_per_chunk = elapsed / current_chunk
+                    remaining_chunks = doc.chunks_count - current_chunk
+                    estimated_remaining = avg_time_per_chunk * remaining_chunks
+
+                    # 格式化时间
+                    if estimated_remaining < 60:
+                        time_str = f"约 {int(estimated_remaining)} 秒"
+                    elif estimated_remaining < 3600:
+                        time_str = f"约 {int(estimated_remaining/60)} 分钟"
+                    else:
+                        time_str = f"约 {int(estimated_remaining/3600)} 小时 {int((estimated_remaining%3600)/60)} 分钟"
+
+                    print(f"   预估剩余: {time_str}")
             else:
                 print(f"   状态: {doc.status.value}")
 
