@@ -410,23 +410,22 @@ class OllamaPilotChat:
         
         try:
             print(f"\n🔄 正在切换到模型: {model_name}...")
-            
-            with OllamaLockContext(owner="switch_model", timeout=60):
-                new_model = init_ollama_model(model_name, temperature=self.temperature)
-                
-                agent_kwargs = {"skills_dir": self.skills_dir}
-                if self.current_embedding_model:
-                    agent_kwargs["embedding_model"] = self.current_embedding_model
-                
-                new_agent = create_agent(new_model, **agent_kwargs)
-                
-                self.current_model = new_model
-                self.current_model_name = model_name
-                self.agent = new_agent
-            
+
+            new_model = init_ollama_model(model_name, temperature=self.temperature)
+
+            agent_kwargs = {"skills_dir": self.skills_dir}
+            if self.current_embedding_model:
+                agent_kwargs["embedding_model"] = self.current_embedding_model
+
+            new_agent = create_agent(new_model, **agent_kwargs)
+
+            self.current_model = new_model
+            self.current_model_name = model_name
+            self.agent = new_agent
+
             if self.current_session_id in self.sessions:
                 self.sessions[self.current_session_id].model_name = model_name
-            
+
             print(f"✅ 已切换到模型: {model_name}")
             return True
         except Exception as e:
