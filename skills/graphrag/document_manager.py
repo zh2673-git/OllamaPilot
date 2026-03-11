@@ -410,6 +410,12 @@ class DocumentManager:
             stats = entity_extractor.get_statistics()
             logger.info(f"[{doc_info.name}] 词典统计: {stats}")
 
+            # 清除缓存，确保搜索服务能加载新索引
+            cache_key = f"{doc_id}_{doc_info.model_name}"
+            if cache_key in self._graph_service_cache:
+                del self._graph_service_cache[cache_key]
+                logger.info(f"[{doc_info.name}] 已清除搜索缓存，新索引可立即搜索")
+
         except Exception as e:
             logger.error(f"[{doc_info.name}] 索引错误: {e}")
             progress_callback(0.0, f"索引错误: {e}")
