@@ -2,14 +2,12 @@
 name: web_search
 description: 提供网络搜索能力，支持自动部署和管理 SearXNG 搜索引擎
 triggers:
+  # 基础搜索 - 简单直接的查询
   - 搜索
-  - 查询
-  - 网上
-  - 网络
-  - google
-  - 百度
-  - 查找
-  - 资料
+  - 查
+  - 找
+  - 看看
+  - 了解一下
 tools:
   - web_search
   - web_search_setup
