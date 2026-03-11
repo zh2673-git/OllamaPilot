@@ -81,7 +81,32 @@ class DocumentManager:
 
         # 加载已有文档信息
         self._load_document_registry()
-    
+
+        # 恢复卡住的文档状态
+        self._recover_stuck_documents()
+
+    def _recover_stuck_documents(self):
+        """
+        恢复卡住的文档状态
+
+        当程序异常退出时，可能有文档状态卡在 RUNNING
+        此方法将这些文档状态重置为 FAILED，允许重新索引
+        """
+        recovered_count = 0
+        for doc_id, doc_info in self.documents.items():
+            if doc_info.status == IndexingStatus.RUNNING:
+                # 检查是否有对应的活跃线程
+                if doc_id not in self._indexing_tasks:
+                    # 没有活跃线程，说明是上次异常退出留下的
+                    doc_info.status = IndexingStatus.FAILED
+                    doc_info.message = "上次索引中断，可尝试断点续传"
+                    recovered_count += 1
+                    print(f"🔄 恢复卡住文档: {doc_info.name}")
+
+        if recovered_count > 0:
+            self._save_document_registry()
+            print(f"✅ 已恢复 {recovered_count} 个卡住的文档")
+
     def _get_model_safe_name(self, model_name: Optional[str]) -> str:
         """获取模型安全名称（用于文件名）"""
         if not model_name:
@@ -361,7 +386,7 @@ class DocumentManager:
         except Exception as e:
             logger.error(f"[{doc_info.name}] 索引错误: {e}")
             progress_callback(0.0, f"索引错误: {e}")
-            raise
+            # 不重新抛出异常，让上层处理状态更新
     
     def get_document_status(self, doc_id: str) -> Optional[DocumentInfo]:
         """获取文档状态"""

@@ -231,8 +231,12 @@ class HybridEntityExtractor:
             # 构建提示词
             prompt = self._build_extraction_prompt(text)
 
-            # 调用LLM
-            response = llm_client.generate(prompt)
+            # 调用LLM（使用静默模式，不打印超时错误）
+            response = llm_client.generate(prompt, timeout=120, silent=True)
+
+            # 如果LLM返回为空，静默返回（不打印错误）
+            if not response:
+                return entities, relations
 
             # 解析结果
             result = self._parse_llm_response(response)
@@ -268,7 +272,8 @@ class HybridEntityExtractor:
                 ))
 
         except Exception as e:
-            print(f"⚠️ LLM抽取失败: {e}")
+            # 静默处理异常，不打印错误信息
+            pass
 
         return entities, relations
 

@@ -28,13 +28,14 @@ class SimpleLLMClient:
         self.base_url = base_url
         self.generate_url = f"{base_url}/api/generate"
     
-    def generate(self, prompt: str, timeout: int = 30) -> str:
+    def generate(self, prompt: str, timeout: int = 120, silent: bool = False) -> str:
         """
         生成文本
         
         Args:
             prompt: 提示词
-            timeout: 超时时间（秒）
+            timeout: 超时时间（秒），默认120秒
+            silent: 是否静默模式（不打印错误信息）
             
         Returns:
             生成的文本
@@ -54,14 +55,17 @@ class SimpleLLMClient:
                 result = response.json()
                 return result.get("response", "")
             else:
-                print(f"⚠️ LLM调用失败: {response.status_code}")
+                if not silent:
+                    print(f"⚠️ LLM调用失败: {response.status_code}")
                 return ""
                 
         except requests.exceptions.Timeout:
-            print(f"⚠️ LLM调用超时（{timeout}秒）")
+            if not silent:
+                print(f"⏳ LLM响应较慢，使用备用方案...")
             return ""
         except Exception as e:
-            print(f"⚠️ LLM调用错误: {e}")
+            if not silent:
+                print(f"⚠️ LLM调用错误: {e}")
             return ""
     
     def is_available(self) -> bool:
