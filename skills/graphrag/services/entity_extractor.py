@@ -234,10 +234,6 @@ class HybridEntityExtractor:
             batch_end = min(batch_start + batch_size, len(chunks))
             batch_chunks = chunks[batch_start:batch_end]
 
-            # 调用进度回调
-            if progress_callback:
-                progress_callback(batch_idx + 1, total_batches, batch_start, len(chunks))
-
             # 如果只有一个块，直接处理
             if len(batch_chunks) == 1:
                 entities, relations = self.extract(
@@ -247,6 +243,10 @@ class HybridEntityExtractor:
                     top_k=top_k
                 )
                 results.append((entities, relations))
+                # 调用进度回调（包含实体数）
+                if progress_callback:
+                    total_entities_so_far = sum(len(r[0]) for r in results)
+                    progress_callback(batch_idx + 1, total_batches, batch_start, len(chunks), total_entities_so_far)
                 continue
 
             # 多个块，批量处理
@@ -266,6 +266,11 @@ class HybridEntityExtractor:
                         top_k=top_k
                     )
                     results.append((entities, relations))
+
+            # 调用进度回调（包含实体数）
+            if progress_callback:
+                total_entities_so_far = sum(len(r[0]) for r in results)
+                progress_callback(batch_idx + 1, total_batches, batch_start, len(chunks), total_entities_so_far)
 
         return results
 

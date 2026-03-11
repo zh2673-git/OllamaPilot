@@ -343,11 +343,13 @@ class DocumentManager:
             batch_results = []
 
             # 定义批量进度回调
-            def batch_progress_callback(batch_idx, total_batches, batch_start, total_chunks):
+            def batch_progress_callback(batch_idx, total_batches, batch_start, total_chunks, total_entities_so_far=0):
                 # 计算实际处理的块数
                 current_chunk = min(batch_start + batch_size, total_chunks)
                 chunk_progress = 0.35 + (0.6 * current_chunk / total_chunks)
                 progress_callback(chunk_progress, f"处理块 {current_chunk}/{total_chunks} (批次 {batch_idx}/{total_batches})...")
+                # 实时更新实体数
+                doc_info.entities_count = total_entities_so_far
                 # 保存注册表以更新进度
                 self._save_document_registry()
 
