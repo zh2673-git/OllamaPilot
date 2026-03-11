@@ -56,21 +56,24 @@ class DocumentManager:
         self,
         base_persist_dir: str = "./data/graphrag",
         embedding_model: Optional[str] = None,
-        progress_callback: Optional[Callable[[str, float, str], None]] = None
+        progress_callback: Optional[Callable[[str, float, str], None]] = None,
+        batch_size: int = 10
     ):
         """
         初始化文档管理器
-        
+
         Args:
             base_persist_dir: 基础持久化目录
             embedding_model: Embedding模型名称
             progress_callback: 进度回调函数(doc_id, progress, message)
+            batch_size: 批量处理大小（默认10，可配置）
         """
         self.base_persist_dir = Path(base_persist_dir)
         self.base_persist_dir.mkdir(parents=True, exist_ok=True)
         self.embedding_model = embedding_model
         self.progress_callback = progress_callback
-        
+        self.batch_size = batch_size
+
         # 文档信息存储
         self.documents: Dict[str, DocumentInfo] = {}
 
@@ -338,8 +341,8 @@ class DocumentManager:
             total_entities = 0
             total_relations = 0
 
-            # 使用批量抽取（每批5个块）
-            batch_size = 5
+            # 使用批量抽取（可配置批次大小，默认10）
+            batch_size = self.batch_size
             batch_results = []
 
             # 定义批量进度回调

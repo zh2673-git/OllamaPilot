@@ -798,11 +798,19 @@ class OllamaPilotChat:
                 else:
                     print("（无回答）\n")
 
+        except KeyboardInterrupt:
+            print("\n\n⚠️ 用户中断")
+            print("   如需退出程序，请输入 'quit' 或 'exit'\n")
+            return
+
         except Exception as e:
             print(f"\n⚠️ 流式输出失败，使用普通模式: {e}\n")
             try:
                 response = self.agent.invoke(user_input, thread_id=self.current_session_id)
                 if response:
                     print(f"助手: {response}\n")
+            except KeyboardInterrupt:
+                print("\n\n⚠️ 用户中断")
+                print("   如需退出程序，请输入 'quit' 或 'exit'\n")
             except Exception as e2:
                 print(f"❌ 调用失败: {e2}\n")
