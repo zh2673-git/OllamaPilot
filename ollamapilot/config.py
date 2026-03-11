@@ -79,6 +79,7 @@ class Config:
             'GRAPH_RAG_PERSIST_DIR': './data/graphrag',
             'VERBOSE': 'false',
             'DEFAULT_THREAD_ID': 'default',
+            'CLI_TIMEOUT': '120',  # CLI 响应超时时间（秒）
         }
     
     def get(self, key: str, default: Optional[str] = None) -> Optional[str]:
@@ -167,6 +168,11 @@ class Config:
     def default_thread_id(self) -> str:
         return self.get('DEFAULT_THREAD_ID', 'default')
     
+    @property
+    def cli_timeout(self) -> int:
+        """CLI 响应超时时间（秒），默认 120 秒"""
+        return self.get_int('CLI_TIMEOUT', 120)
+    
     def reload(self):
         """重新加载配置"""
         self._config.clear()
@@ -188,6 +194,7 @@ class Config:
             'graph_rag_persist_dir': self.graph_rag_persist_dir,
             'verbose': self.verbose,
             'default_thread_id': self.default_thread_id,
+            'cli_timeout': self.cli_timeout,
         }
     
     def print_config(self):

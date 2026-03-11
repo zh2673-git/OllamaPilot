@@ -758,15 +758,15 @@ class OllamaPilotChat:
         full_response = ""
         has_output = False
         start_time = time.time()
-        timeout = 30  # 30秒超时
+        timeout = self.config.cli_timeout  # 从配置读取超时时间，默认 120 秒
 
         try:
             for chunk in self.agent.stream(user_input, thread_id=self.current_session_id):
                 # 检查超时
                 if time.time() - start_time > timeout:
-                    print("\n\n⏰ 响应超时，可能正在索引中...")
-                    print(f"   使用 /docs 查看索引进度")
-                    print(f"   索引完成后对话将恢复正常\n")
+                    print(f"\n\n⏰ 响应超时（{timeout}秒）")
+                    print(f"   可能原因: 模型生成较慢、网络搜索耗时、或知识库检索中")
+                    print(f"   提示: 可通过 .env 文件设置 CLI_TIMEOUT 调整超时时间\n")
                     return
 
                 if isinstance(chunk, dict):
