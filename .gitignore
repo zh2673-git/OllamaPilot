@@ -157,3 +157,6 @@ data/
 
 # Notes and documentation
 笔记/
+
+# Release notes (local only)
+RELEASE_*.md
