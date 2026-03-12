@@ -13,6 +13,7 @@ from .duckduckgo import DuckDuckGoSearchEngine
 from .serper import SerperSearchEngine
 from .bing import BingSearchEngine
 from .brave import BraveSearchEngine
+from .tavily import TavilySearchEngine
 
 __all__ = [
     "SearchEngineBase",
@@ -31,4 +32,5 @@ __all__ = [
     "SerperSearchEngine",
     "BingSearchEngine",
     "BraveSearchEngine",
+    "TavilySearchEngine",
 ]

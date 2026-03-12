@@ -41,6 +41,12 @@ class SearchEngineRouter:
             "brave",        # Brave搜索（需配置API Key，2000次/月）
             "duckduckgo",   # 免费备用（无需配置）
         ],  # 通用领域
+        "research": [
+            "tavily",       # 专为AI研究设计（需配置API Key，1000次/月）
+            "searxng",      # 本地聚合搜索
+            "serper",       # Google搜索
+            "duckduckgo",   # 免费备用
+        ],  # 深度研究领域
     }
     
     def __init__(self):
