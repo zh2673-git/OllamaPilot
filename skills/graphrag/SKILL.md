@@ -103,28 +103,42 @@ tools:
 → 调用：get_entity_relations("张三")
 ```
 
-### 场景4：分类知识库搜索（新功能）
+### 场景4：分类知识库搜索（新功能 - 重要）
 
-**当用户提到"XXX知识库"、"在XXX中搜索"、"XXX分类"时，使用 `search_knowledge_base` 在指定分类中搜索。**
+**当用户提到"XXX知识库"、"在XXX中搜索"、"XXX分类"时，必须使用 `search_knowledge_base` 在指定分类中搜索。**
 
-**判断标准：**
-- 用户说"伤寒论知识库"、"在中医经典中搜索"、"搜索XXX分类"
-- 用户明确指定了分类名称
-- 用户想限定在某个知识领域搜索
+**⚠️ 关键规则：**
+1. **只要用户说了"知识库"三个字，就必须用 `search_knowledge_base`**
+2. **不要**使用 `search_knowledge`，那是用于全局搜索的
+3. **从用户的话中提取分类名称**：
+   - "伤寒论知识库" → category="伤寒论"
+   - "中医经典分类" → category="中医经典"
+   - "在伤寒论中搜索" → category="伤寒论"
 
-**必须使用 `search_knowledge_base` 的场景：**
+**必须使用 `search_knowledge_base` 的场景（重要）：**
 ```
 用户：搜索伤寒论知识库，肺气肿的成因
-→ 调用：search_knowledge_base(category="伤寒论", query="肺气肿的成因")
+→ 必须调用：search_knowledge_base(category="伤寒论", query="肺气肿的成因")
+→ 不要用 search_knowledge！
 
 用户：在中医经典分类中搜索伤寒论
-→ 调用：search_knowledge_base(category="中医经典", query="伤寒论")
+→ 必须调用：search_knowledge_base(category="中医经典", query="伤寒论")
+
+用户：调用伤寒论知识库分类，查看肺气肿的原因
+→ 必须调用：search_knowledge_base(category="伤寒论", query="肺气肿的原因")
 
 用户：只搜索伤寒论子分类
 → 调用：search_knowledge_base(category="中医经典/伤寒论", query="太阳病")
 
 用户：查看有哪些知识库分类
 → 调用：list_knowledge_categories()
+```
+
+**❌ 错误示例（不要这样做）：**
+```
+用户：搜索伤寒论知识库，肺气肿的成因
+错误：search_knowledge({'query': '肺气肿 成因'})  ← 这是全局搜索！
+正确：search_knowledge_base(category='伤寒论', query='肺气肿的成因')  ← 分类搜索！
 ```
 
 **支持的分类结构：**
