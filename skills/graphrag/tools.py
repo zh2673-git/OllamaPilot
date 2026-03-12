@@ -349,12 +349,15 @@ def query_graph_stats() -> str:
 
 
 @tool
-def search_knowledge(
+def search_all_documents(
     query: str,
     n_results: int = 5
 ) -> str:
     """
-    搜索知识图谱
+    搜索所有文档（全局搜索）
+    
+    在整个知识库中搜索，不限定特定分类。
+    当用户没有指定具体分类时使用此工具。
 
     Args:
         query: 查询文本
@@ -556,28 +559,21 @@ def get_entity_relations(entity_name: str) -> str:
 
 
 @tool
-def search_knowledge_base(
+def search_in_category(
     category: str,
     query: str,
     n_results: int = 5
 ) -> str:
     """
-    搜索指定分类的知识库
+    在指定分类中搜索（分类搜索）
     
-    在指定的知识库分类中搜索相关内容。分类是你手动创建的文件夹，
-    名称由用户自定义（如"中医经典"、"现代医学"等）。
+    只在用户指定的分类文件夹中搜索，不搜索其他分类。
+    当用户明确说了分类名称（如"伤寒论"、"中医经典"）时使用此工具。
     
-    支持多级文件夹结构：
-    - 一级分类：data/graphrag/中医经典/
-    - 二级分类：data/graphrag/中医经典/伤寒论/
-    - 可直接搜索一级分类，会自动包含所有子目录
-    
-    使用前请确保：
-    1. 已在 data/graphrag/ 下创建分类文件夹
-    2. 已将相关文档的向量存储移动到该文件夹
+    分类是 data/graphrag/ 下的文件夹，由用户自定义名称。
     
     Args:
-        category: 知识库分类名称（用户自定义的文件夹名），支持多级如"中医经典/伤寒论"
+        category: 分类名称（如"伤寒论"、"中医经典"、"中医经典/伤寒论"）
         query: 查询内容
         n_results: 返回结果数量，默认5条
         
@@ -585,8 +581,8 @@ def search_knowledge_base(
         搜索结果
         
     Example:
-        search_knowledge_base(category="中医经典", query="伤寒论治疗方法")
-        search_knowledge_base(category="中医经典/伤寒论", query="太阳病")
+        search_in_category(category="伤寒论", query="太阳病")
+        search_in_category(category="中医经典", query="金匮要略")
     """
     if not _document_manager:
         return "❌ 文档管理器未初始化"
