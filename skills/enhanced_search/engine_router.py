@@ -35,7 +35,8 @@ class SearchEngineRouter:
         "code": ["github", "gitee"],  # 代码领域
         "encyclopedia": ["baidu_baike", "wikipedia"],  # 百科领域
         "general": [
-            "searxng",      # 本地聚合搜索（质量最佳）
+            "tavily",       # 专为AI设计，质量最佳（需配置API Key，1000次/月）
+            "searxng",      # 本地聚合搜索（无限额度）
             "serper",       # Google搜索（需配置API Key，2500次/月）
             "bing",         # 必应搜索（需配置API Key，1000次/月）
             "brave",        # Brave搜索（需配置API Key，2000次/月）
