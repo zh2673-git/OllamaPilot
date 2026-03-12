@@ -80,7 +80,8 @@ class GraphRAGMiddleware(AgentMiddleware):
 
         # 检查是否明确要求使用知识库
         # 只有在查询中包含特定关键词时才启用知识库检索
-        kg_keywords = ['根据知识库', '查一下知识库', '知识库中', '文档中', '伤寒论', '金匮要略', '搜索文档']
+        # 注意：只匹配用户输入，不匹配模型生成的内容
+        kg_keywords = ['根据知识库', '查一下知识库', '知识库中', '文档中', '搜索文档']
         use_knowledge_base = any(kw in query for kw in kg_keywords)
         
         # 检查是否指定了分类（如"伤寒论知识库"、"XXX分类"）
