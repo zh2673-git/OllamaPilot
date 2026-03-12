@@ -678,7 +678,12 @@ def python_exec(code: str, timeout: int = 30) -> str:
 @tool
 def web_search(query: str, count: int = 5, auto_start: bool = True) -> str:
     """
-    使用 SearXNG 本地搜索引擎进行网络搜索
+    智能网络搜索 - 支持多引擎优先级和自动降级
+    
+    搜索策略：
+    1. 优先使用 SearXNG（本地部署，质量最佳）
+    2. SearXNG 不可用时自动降级到 DuckDuckGo（免费，无需配置）
+    3. 如果配置了其他 API（Serper/Bing/Brave），也会按优先级尝试
     
     支持自动部署：如果检测到 SearXNG 未运行，会尝试自动启动 Docker 容器
     
@@ -695,6 +700,52 @@ def web_search(query: str, count: int = 5, auto_start: bool = True) -> str:
         
     Returns:
         搜索结果
+    """
+    import asyncio
+    
+    # 限制结果数量
+    count = max(1, min(20, count))
+    
+    # 尝试使用增强搜索的路由器（如果可用）
+    try:
+        from skills.enhanced_search.engine_router import SearchEngineRouter
+        
+        async def _smart_search():
+            router = SearchEngineRouter()
+            results = await router.search(query, category="general", num_results=count)
+            return results
+        
+        # 运行异步搜索
+        results = asyncio.run(_smart_search())
+        
+        if results:
+            # 格式化结果
+            output = [f"🔍 搜索 '{query}' 的结果（{len(results)} 条）:\n"]
+            
+            for i, result in enumerate(results, 1):
+                title = result.title if hasattr(result, 'title') else "无标题"
+                url = result.url if hasattr(result, 'url') else ""
+                snippet = result.snippet if hasattr(result, 'snippet') else "无描述"
+                source = result.source if hasattr(result, 'source') else "unknown"
+                
+                output.append(f"{i}. {title}")
+                output.append(f"   URL: {url}")
+                output.append(f"   来源: {source}")
+                output.append(f"   {snippet}\n")
+            
+            return "\n".join(output)
+    except Exception as e:
+        # 增强搜索不可用，回退到原始 SearXNG 逻辑
+        print(f"⚠️ 智能搜索失败，回退到 SearXNG: {e}")
+        pass
+    
+    # 回退到原始 SearXNG 搜索逻辑
+    return _web_search_searxng(query, count, auto_start)
+
+
+def _web_search_searxng(query: str, count: int = 5, auto_start: bool = True) -> str:
+    """
+    使用 SearXNG 进行网络搜索（原始实现）
     """
     # 获取 SearXNG 地址
     searxng_url = os.environ.get("SEARXNG_URL", "http://localhost:8080")
