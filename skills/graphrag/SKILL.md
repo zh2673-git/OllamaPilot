@@ -11,6 +11,7 @@ triggers:
   - 添加文档
   - 上传文档
   - 搜索知识
+  - 分类知识库
   - .pdf
   - .txt
   - .md
@@ -23,6 +24,8 @@ tools:
   - generate_ontology
   - query_graph_stats
   - search_knowledge
+  - search_knowledge_base
+  - list_knowledge_categories
   - list_entities
   - get_entity_relations
 ---
@@ -98,6 +101,43 @@ tools:
 用户：查看"张三"的关系
 → 调用：get_entity_relations("张三")
 ```
+
+### 场景4：分类知识库搜索（新功能）
+
+**当用户指定分类名称时，使用 `search_knowledge_base` 在指定分类中搜索。**
+
+**支持的分类结构：**
+```
+data/graphrag/
+├── 中医经典/                    # 一级分类
+│   ├── 伤寒论_qwen3-embedding_0.6b/
+│   ├── 金匮要略_qwen3-embedding_0.6b/
+│   └── 伤寒论/                  # 二级分类（子文件夹）
+│       ├── 原文_qwen3-embedding_0.6b/
+│       └── 注解_qwen3-embedding_0.6b/
+├── 现代医学/
+└── 法律法规/
+```
+
+**使用方式：**
+```
+用户：在中医经典分类中搜索伤寒论
+→ 调用：search_knowledge_base(category="中医经典", query="伤寒论")
+→ 会自动搜索中医经典及其所有子目录
+
+用户：只搜索伤寒论子分类
+→ 调用：search_knowledge_base(category="中医经典/伤寒论", query="太阳病")
+
+用户：查看有哪些知识库分类
+→ 调用：list_knowledge_categories()
+```
+
+**如何创建分类：**
+1. 索引文档（使用 /index 命令）
+2. 在 `data/graphrag/` 下创建分类文件夹，如 `中医经典/`
+3. 可在分类下创建子文件夹，如 `中医经典/伤寒论/`
+4. 将相关文档的向量存储移动到对应文件夹
+5. 使用 `search_knowledge_base` 指定分类搜索
 
 ## 重要规则
 

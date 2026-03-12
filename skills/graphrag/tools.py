@@ -555,6 +555,105 @@ def get_entity_relations(entity_name: str) -> str:
         return f"❌ 查询失败：{str(e)}"
 
 
+@tool
+def search_knowledge_base(
+    category: str,
+    query: str,
+    n_results: int = 5
+) -> str:
+    """
+    搜索指定分类的知识库
+    
+    在指定的知识库分类中搜索相关内容。分类是你手动创建的文件夹，
+    名称由用户自定义（如"中医经典"、"现代医学"等）。
+    
+    支持多级文件夹结构：
+    - 一级分类：data/graphrag/中医经典/
+    - 二级分类：data/graphrag/中医经典/伤寒论/
+    - 可直接搜索一级分类，会自动包含所有子目录
+    
+    使用前请确保：
+    1. 已在 data/graphrag/ 下创建分类文件夹
+    2. 已将相关文档的向量存储移动到该文件夹
+    
+    Args:
+        category: 知识库分类名称（用户自定义的文件夹名），支持多级如"中医经典/伤寒论"
+        query: 查询内容
+        n_results: 返回结果数量，默认5条
+        
+    Returns:
+        搜索结果
+        
+    Example:
+        search_knowledge_base(category="中医经典", query="伤寒论治疗方法")
+        search_knowledge_base(category="中医经典/伤寒论", query="太阳病")
+    """
+    if not _document_manager:
+        return "❌ 文档管理器未初始化"
+    
+    try:
+        # 搜索指定分类
+        results = _document_manager.search_by_category(category, query, n_results)
+        
+        if not results:
+            # 检查分类是否存在
+            categories = _document_manager.list_categories()
+            if category not in categories:
+                return f"❌ 分类 '{category}' 不存在\n   可用分类: {', '.join(categories) if categories else '无'}\n   提示: 请先在 data/graphrag/ 下创建文件夹并移动文档"
+            else:
+                return f"🔍 在 '{category}' 分类中未找到相关内容"
+        
+        # 格式化结果
+        output = [
+            f"🔍 知识库搜索结果 [{category}] ({len(results)} 条)",
+            "=" * 50
+        ]
+        
+        for i, doc in enumerate(results, 1):
+            doc_name = doc.get("document_name", "未知")
+            score = doc.get("score", 0)
+            content = doc.get("content", "")[:400]
+            
+            output.append(f"\n[{i}] 来源: {doc_name} | 相关度: {score:.2f}")
+            output.append(f"    {content}...")
+        
+        return "\n".join(output)
+        
+    except Exception as e:
+        return f"❌ 搜索失败: {str(e)}"
+
+
+@tool
+def list_knowledge_categories() -> str:
+    """
+    列出所有可用的知识库分类
+    
+    显示你在 data/graphrag/ 目录下创建的所有分类文件夹。
+    
+    Returns:
+        分类列表
+    """
+    if not _document_manager:
+        return "❌ 文档管理器未初始化"
+    
+    try:
+        categories = _document_manager.list_categories()
+        
+        if not categories:
+            return "📂 暂无知识库分类\n   提示: 在 data/graphrag/ 下创建文件夹即可建立分类"
+        
+        output = ["📚 可用知识库分类:", "=" * 30]
+        for i, cat in enumerate(categories, 1):
+            output.append(f"  {i}. {cat}")
+        
+        output.append(f"\n💡 使用方式: search_knowledge_base(category='分类名', query='查询内容')")
+        
+        return "\n".join(output)
+        
+    except Exception as e:
+        return f"❌ 获取分类列表失败: {str(e)}"
+
+
 # 工具列表
 graphrag_tools = [
     upload_document,  # 新增：上传文档到知识库
@@ -562,7 +661,9 @@ graphrag_tools = [
     add_text,
     generate_ontology,
     query_graph_stats,
-    search_knowledge,
+    search_knowledge,        # 搜索所有文档
+    search_knowledge_base,   # 搜索指定分类
+    list_knowledge_categories,  # 列出分类
     list_entities,
     get_entity_relations,
 ]

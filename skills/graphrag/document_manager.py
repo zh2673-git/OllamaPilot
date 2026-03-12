@@ -647,3 +647,95 @@ class DocumentManager:
             "total_relations": total_relations,
             "entity_types": list(entity_types)
         }
+
+    def search_by_category(self, category: str, query: str, n_results: int = 5) -> List[Dict[str, Any]]:
+        """
+        搜索指定分类的知识库
+        
+        扫描 data/graphrag/{category}/ 目录及其子目录下的所有文档存储，
+        在这些文档中执行向量搜索。支持多级文件夹结构。
+        
+        Args:
+            category: 分类名称（用户自定义的文件夹名），支持多级路径如"中医经典/伤寒论"
+            query: 查询文本
+            n_results: 返回结果数量
+            
+        Returns:
+            搜索结果列表
+        """
+        from skills.graphrag.services import GraphRAGService
+        
+        category_path = self.base_persist_dir / category
+        if not category_path.exists():
+            return []
+        
+        all_results = []
+        
+        # 递归扫描分类目录下的所有文档存储
+        def scan_directory(dir_path: Path, relative_path: str = ""):
+            """递归扫描目录，查找所有文档存储"""
+            for item in dir_path.iterdir():
+                if not item.is_dir():
+                    continue
+                
+                # 构建相对路径（用于多级分类）
+                current_relative = f"{relative_path}/{item.name}" if relative_path else item.name
+                
+                # 检查是否是文档存储目录（包含 chroma 子目录）
+                chroma_dir = item / "chroma"
+                if chroma_dir.exists():
+                    # 这是一个文档存储目录
+                    try:
+                        graph_service = GraphRAGService(
+                            persist_dir=str(item),
+                            embedding_model=self.embedding_model
+                        )
+                        
+                        # 执行搜索
+                        results = graph_service.vector_search(query, n_results=n_results)
+                        
+                        # 添加分类和来源信息
+                        for result in results:
+                            result['category'] = category
+                            result['document_path'] = current_relative  # 完整路径如"伤寒论/原文"
+                            result['document_name'] = item.name  # 目录名
+                            
+                        all_results.extend(results)
+                        
+                    except Exception as e:
+                        # 跳过无法加载的目录
+                        continue
+                else:
+                    # 这是一个子分类目录，递归扫描
+                    scan_directory(item, current_relative)
+        
+        # 开始递归扫描
+        scan_directory(category_path)
+        
+        # 按相似度排序并返回前 n_results 个
+        all_results.sort(key=lambda x: x.get('score', 0), reverse=True)
+        return all_results[:n_results]
+    
+    def list_categories(self) -> List[str]:
+        """
+        列出所有可用的知识库分类
+        
+        扫描 data/graphrag/ 目录，返回所有子文件夹名称
+        （排除单个文档存储，只返回分类文件夹）
+        
+        Returns:
+            分类名称列表
+        """
+        categories = []
+        
+        if not self.base_persist_dir.exists():
+            return categories
+        
+        for item in self.base_persist_dir.iterdir():
+            if item.is_dir():
+                # 检查是否是分类文件夹（包含子目录）
+                has_subdirs = any(sub.is_dir() for sub in item.iterdir())
+                if has_subdirs:
+                    categories.append(item.name)
+        
+        return sorted(categories)
