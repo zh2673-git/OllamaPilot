@@ -36,7 +36,6 @@ class TavilySearchEngine(SearchEngineBase):
     
     def __init__(self):
         super().__init__()
-        self.api_key = os.environ.get("TAVILY_API_KEY")
         self.base_url = "https://api.tavily.com/search"
     
     def is_available(self) -> bool:
@@ -46,7 +45,9 @@ class TavilySearchEngine(SearchEngineBase):
         Returns:
             bool: 是否配置了 API Key
         """
-        return bool(self.api_key)
+        # 实时检查环境变量，确保 .env 加载后生效
+        api_key = os.environ.get("TAVILY_API_KEY")
+        return bool(api_key)
     
     async def search(
         self, 
@@ -65,14 +66,16 @@ class TavilySearchEngine(SearchEngineBase):
         Returns:
             List[SearchResult]: 搜索结果列表
         """
-        if not self.api_key:
+        # 实时获取 API Key
+        api_key = os.environ.get("TAVILY_API_KEY")
+        if not api_key:
             raise ValueError("TAVILY_API_KEY not configured")
         
         results = []
         
         try:
             payload = {
-                "api_key": self.api_key,
+                "api_key": api_key,
                 "query": query,
                 "max_results": min(num_results, 20),  # Tavily 最大返回20条
                 "search_depth": search_depth,

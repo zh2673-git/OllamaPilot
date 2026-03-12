@@ -36,7 +36,6 @@ class SerperSearchEngine(SearchEngineBase):
     
     def __init__(self):
         super().__init__()
-        self.api_key = os.environ.get("SERPER_API_KEY")
         self.base_url = "https://google.serper.dev/search"
     
     def is_available(self) -> bool:
@@ -46,7 +45,9 @@ class SerperSearchEngine(SearchEngineBase):
         Returns:
             bool: 是否配置了 API Key
         """
-        return bool(self.api_key)
+        # 实时检查环境变量，确保 .env 加载后生效
+        api_key = os.environ.get("SERPER_API_KEY")
+        return bool(api_key)
     
     async def search(self, query: str, num_results: int = 10) -> List[SearchResult]:
         """
@@ -59,14 +60,16 @@ class SerperSearchEngine(SearchEngineBase):
         Returns:
             List[SearchResult]: 搜索结果列表
         """
-        if not self.api_key:
+        # 实时获取 API Key
+        api_key = os.environ.get("SERPER_API_KEY")
+        if not api_key:
             raise ValueError("SERPER_API_KEY not configured")
         
         results = []
         
         try:
             headers = {
-                "X-API-KEY": self.api_key,
+                "X-API-KEY": api_key,
                 "Content-Type": "application/json"
             }
             
