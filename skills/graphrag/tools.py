@@ -642,7 +642,7 @@ def list_knowledge_categories() -> str:
         for i, cat in enumerate(categories, 1):
             output.append(f"  {i}. {cat}")
         
-        output.append(f"\n💡 使用方式: search_knowledge_base(category='分类名', query='查询内容')")
+        output.append(f"\n💡 使用方式: search_in_category(category='分类名', query='查询内容')")
         
         return "\n".join(output)
         
@@ -657,9 +657,9 @@ graphrag_tools = [
     add_text,
     generate_ontology,
     query_graph_stats,
-    search_knowledge,        # 搜索所有文档
-    search_knowledge_base,   # 搜索指定分类
-    list_knowledge_categories,  # 列出分类
+    search_all_documents,        # 搜索所有文档
+    search_in_category,          # 搜索指定分类
+    list_knowledge_categories,   # 列出分类
     list_entities,
     get_entity_relations,
 ]
