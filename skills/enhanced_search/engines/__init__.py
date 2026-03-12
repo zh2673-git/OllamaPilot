@@ -9,7 +9,8 @@ from .wikipedia import WikipediaSearchEngine, WikipediaENSearchEngine
 from .baidu_baike import BaiduBaikeSearchEngine
 from .pubmed import PubMedSearchEngine
 from .github import GitHubSearchEngine, GiteeSearchEngine
-from .duckduckgo import DuckDuckGoSearchEngine
+from skills.enhanced_search.engines.duckduckgo import DuckDuckGoSearchEngine
+from skills.enhanced_search.engines.baidu import BaiduSearchEngine
 
 __all__ = [
     "SearchEngineBase",
@@ -25,4 +26,5 @@ __all__ = [
     "GitHubSearchEngine",
     "GiteeSearchEngine",
     "DuckDuckGoSearchEngine",
+    "BaiduSearchEngine",
 ]

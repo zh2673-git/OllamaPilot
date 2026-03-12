@@ -30,11 +30,19 @@ class SearchEngineRouter:
     """
     
     # 引擎优先级配置
+    # 优先级规则：
+    # 1. 配置的API优先（质量通常更好）
+    # 2. 国内可直接访问的免费API
+    # 3. 无限额度的免费API
     ENGINE_PRIORITY = {
         "academic": ["pubmed", "arxiv"],  # 学术领域
         "code": ["github", "gitee"],  # 代码领域
         "encyclopedia": ["baidu_baike", "wikipedia"],  # 百科领域
-        "general": ["searxng", "duckduckgo"],  # 通用领域
+        "general": [
+            "searxng",      # 本地部署，质量最佳，无限额度
+            "duckduckgo",   # 免费，无需配置，国内可用
+            "baidu",        # 百度搜索（免费，中文优化）
+        ],  # 通用领域 - 全部为国内可用免费API
     }
     
     def __init__(self):
