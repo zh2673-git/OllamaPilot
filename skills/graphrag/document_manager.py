@@ -681,14 +681,30 @@ class DocumentManager:
                 # 构建相对路径（用于多级分类）
                 current_relative = f"{relative_path}/{item.name}" if relative_path else item.name
                 
-                # 检查是否是文档存储目录（包含 chroma 子目录）
-                chroma_dir = item / "chroma"
-                if chroma_dir.exists():
+                # 检查是否是文档存储目录（包含向量索引文件）
+                # SimpleVectorStore 使用 index_*.json 和 vectors_*.json 文件
+                is_doc_store = any(
+                    f.name.startswith(('index_', 'vectors_')) and f.name.endswith('.json')
+                    for f in item.iterdir() if f.is_file()
+                )
+                
+                if is_doc_store:
                     # 这是一个文档存储目录
                     try:
+                        # 从文件名中提取 embedding 模型名称
+                        # 例如：index_qwen3_embedding_0_6b.json -> qwen3-embedding:0.6b
+                        embedding_model = self.embedding_model
+                        if not embedding_model:
+                            for f in item.iterdir():
+                                if f.is_file() and f.name.startswith('index_') and f.name.endswith('.json'):
+                                    # 提取模型名称：index_qwen3_embedding_0_6b.json -> qwen3-embedding:0.6b
+                                    model_part = f.name[6:-5]  # 去掉 'index_' 和 '.json'
+                                    embedding_model = model_part.replace('_', '-').replace('--', ':')
+                                    break
+                        
                         graph_service = GraphRAGService(
                             persist_dir=str(item),
-                            embedding_model=self.embedding_model
+                            embedding_model=embedding_model
                         )
                         
                         # 执行搜索
