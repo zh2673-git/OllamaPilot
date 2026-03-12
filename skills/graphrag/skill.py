@@ -31,7 +31,9 @@ from skills.graphrag.tools import (
     add_document,
     add_text,
     query_graph_stats,
-    search_knowledge,
+    search_all_documents,
+    search_in_category,
+    list_knowledge_categories,
     list_entities,
     get_entity_relations,
     init_graphrag_services,
@@ -63,7 +65,7 @@ class GraphRAGSkill(Skill):
         # 系统会自动提取查询中的实体，检索相关文档和关系
 
         # 3. 手动搜索知识图谱
-        search_knowledge(query="张三在哪里工作？")
+        search_all_documents(query="张三在哪里工作？")
 
     触发词:
         - 知识图谱、文档问答、知识库
@@ -324,7 +326,9 @@ class GraphRAGSkill(Skill):
             add_document,     # 添加文档到知识图谱（不复制到知识库）
             add_text,
             query_graph_stats,
-            search_knowledge,
+            search_all_documents,  # 全局搜索所有文档
+            search_in_category,    # 在指定分类中搜索
+            list_knowledge_categories,  # 列出所有分类
             list_entities,
             get_entity_relations,
         ]
@@ -350,10 +354,12 @@ class GraphRAGSkill(Skill):
    - 适用于临时文档
 
 3. **add_text(text, source)** - 添加文本片段
-4. **search_knowledge(query)** - 搜索知识库
-5. **query_graph_stats()** - 查看图谱统计
-6. **list_entities(entity_type)** - 列出实体
-7. **get_entity_relations(entity_name)** - 查看实体关系
+4. **search_all_documents(query)** - 全局搜索所有文档（用户没说分类时用）
+5. **search_in_category(category, query)** - 在指定分类中搜索（用户说了分类名称时用）
+6. **list_knowledge_categories()** - 列出所有知识库分类
+7. **query_graph_stats()** - 查看图谱统计
+8. **list_entities(entity_type)** - 列出实体
+9. **get_entity_relations(entity_name)** - 查看实体关系
 
 ## 核心规则
 
