@@ -37,7 +37,7 @@ class Config:
             print(f"   将使用默认配置")
             self._load_defaults()
             return
-        
+
         try:
             with open(self.env_file, 'r', encoding='utf-8') as f:
                 for line in f:
@@ -45,7 +45,7 @@ class Config:
                     # 跳过空行和注释
                     if not line or line.startswith('#'):
                         continue
-                    
+
                     # 解析键值对
                     if '=' in line:
                         key, value = line.split('=', 1)
@@ -57,9 +57,12 @@ class Config:
                         elif value.startswith("'") and value.endswith("'"):
                             value = value[1:-1]
                         self._config[key] = value
-            
+                        # 同时设置到环境变量，供其他模块使用
+                        if key not in os.environ:
+                            os.environ[key] = value
+
             print(f"✅ 已加载配置: {self.env_file}")
-            
+
         except Exception as e:
             print(f"⚠️ 加载配置文件失败: {e}")
             self._load_defaults()
