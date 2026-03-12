@@ -12,6 +12,7 @@ triggers:
   - 上传文档
   - 搜索知识
   - 分类知识库
+  - 知识库
   - .pdf
   - .txt
   - .md
@@ -104,7 +105,27 @@ tools:
 
 ### 场景4：分类知识库搜索（新功能）
 
-**当用户指定分类名称时，使用 `search_knowledge_base` 在指定分类中搜索。**
+**当用户提到"XXX知识库"、"在XXX中搜索"、"XXX分类"时，使用 `search_knowledge_base` 在指定分类中搜索。**
+
+**判断标准：**
+- 用户说"伤寒论知识库"、"在中医经典中搜索"、"搜索XXX分类"
+- 用户明确指定了分类名称
+- 用户想限定在某个知识领域搜索
+
+**必须使用 `search_knowledge_base` 的场景：**
+```
+用户：搜索伤寒论知识库，肺气肿的成因
+→ 调用：search_knowledge_base(category="伤寒论", query="肺气肿的成因")
+
+用户：在中医经典分类中搜索伤寒论
+→ 调用：search_knowledge_base(category="中医经典", query="伤寒论")
+
+用户：只搜索伤寒论子分类
+→ 调用：search_knowledge_base(category="中医经典/伤寒论", query="太阳病")
+
+用户：查看有哪些知识库分类
+→ 调用：list_knowledge_categories()
+```
 
 **支持的分类结构：**
 ```
@@ -117,19 +138,6 @@ data/graphrag/
 │       └── 注解_qwen3-embedding_0.6b/
 ├── 现代医学/
 └── 法律法规/
-```
-
-**使用方式：**
-```
-用户：在中医经典分类中搜索伤寒论
-→ 调用：search_knowledge_base(category="中医经典", query="伤寒论")
-→ 会自动搜索中医经典及其所有子目录
-
-用户：只搜索伤寒论子分类
-→ 调用：search_knowledge_base(category="中医经典/伤寒论", query="太阳病")
-
-用户：查看有哪些知识库分类
-→ 调用：list_knowledge_categories()
 ```
 
 **如何创建分类：**
