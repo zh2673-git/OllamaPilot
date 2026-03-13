@@ -163,4 +163,6 @@ RELEASE_*.md
 
 # Channel config (contains sensitive info)
 channels/config.yaml
+!channels/config.yaml.example
+channels/config.yaml
 logs/
