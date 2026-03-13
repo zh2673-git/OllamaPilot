@@ -57,6 +57,41 @@
 
 ---
 
+## 📱 远程控制 - 多渠道接入
+
+**🎉 新功能：通过 QQ、飞书、钉钉远程控制 Agent**
+
+Channels 模块让你可以通过多种即时通讯工具远程调用 Agent，特别适合：
+- 🚀 在手机上通过 QQ 发送指令
+- 🏠 远程控制本地运行的 AI 助手
+- 📱 无需公网 IP，使用平台推送消息
+
+```bash
+# 安装依赖
+pip install aiohttp tenacity pyyaml
+
+# 复制配置模板
+cp channels/config.example.yaml channels/config.yaml
+
+# 编辑配置，填入你的 API Key
+vim channels/config.yaml
+
+# 启动渠道服务
+python -m channels.runner
+```
+
+### 支持的渠道
+
+| 渠道 | 状态 | 说明 |
+|------|------|------|
+| QQ | ✅ | 使用官方 Bot API，个人号可用 |
+| 飞书 | ✅ | 企业自建应用 |
+| 钉钉 | ✅ | 企业内部机器人 |
+
+详见 [channels/DESIGN.md](channels/DESIGN.md)
+
+---
+
 ## 🎯 本项目特色（实战案例）
 
 ### 📊 案例：伤寒论知识图谱构建
@@ -453,7 +488,20 @@ agent = create_agent(model, middleware=[mcp_mw])
 
 ## 📋 版本历史
 
-### v0.2.8 (当前) - 流式输出优化与异步中间件
+### v0.3.0 (当前) - 多渠道远程控制
+
+**🎉 全新功能：通过 QQ、飞书、钉钉远程控制 Agent**
+
+- ✅ **Channels 模块**：独立的多渠道远程控制模块
+- ✅ **QQ 开放平台**：使用官方 Bot API，不再依赖 go-cqhttp
+- ✅ **飞书/钉钉**：支持企业微信、钉钉机器人
+- ✅ **零侵入设计**：不修改原项目代码，独立运行
+- ✅ **自动发现**：渠道注册表机制，新增渠道只需添加文件
+- ✅ **错误重试**：使用 tenacity 实现指数退避重试
+- ✅ **运行统计**：记录消息数、成功率、响应时间
+- ✅ **配置模板**：提供 config.example.yaml，用户可安全 Fork
+
+### v0.2.8 - 流式输出优化与异步中间件
 
 **🎉 体验升级：更流畅的流式输出**
 
