@@ -41,28 +41,43 @@ channels:
   #   2. 创建应用（需要个人实名认证）
   #   3. 获取 AppID、AppSecret、Token
   #   4. 配置机器人能力
+  #
+  # 获取凭证步骤:
+  #   - AppID: 应用详情页 → 应用凭证 → AppID
+  #   - AppSecret: 应用详情页 → 应用凭证 → AppSecret
+  #   - Token: 开发设置 → 消息推送 → Token
+  #
+  # 重要提示:
+  #   - 白名单使用 OpenID 而非 QQ 号！首次运行时日志会显示发送者的 OpenID
+  #   - 沙箱环境(sandbox: true)用于开发测试，正式发布后改为 false
   qq:
     enabled: false
 
-    # 从 QQ 开放平台获取
+    # 从 QQ 开放平台获取（必填）
     app_id: "YOUR_APP_ID"
     app_secret: "YOUR_APP_SECRET"
     token: "YOUR_TOKEN"
 
-    # 是否使用沙箱环境（测试用）
-    sandbox: false
+    # 是否使用沙箱环境（开发测试时设为 true）
+    sandbox: true
 
-    # 白名单（仅允许这些 QQ 号使用）
+    # 白名单（仅允许这些用户使用）
+    # 注意：QQ Bot v2 使用 OpenID，不是 QQ 号！格式如: "EBF1C467FE7DAD4821DA7CA3A83ADAF9"
+    # 首次启动后，给机器人发消息，日志会显示你的 OpenID
     whitelist:
-      - "YOUR_QQ_NUMBER"
+      - "YOUR_OPEN_ID"
 
-    # 群聊中只响应 @机器人的消息
+    # 群聊中只响应 @机器人的消息（建议设为 true）
     at_only_in_group: true
 
-    # 订阅的事件类型
+    # QQ Bot v2 Intents 事件订阅（必填，决定接收哪些消息）
+    # C2C_MESSAGE_CREATE: 单聊消息 (1<<25) - 用户私聊机器人
+    # GROUP_AT_MESSAGE_CREATE: 群聊@消息 (1<<26) - 群聊中@机器人
+    # DIRECT_MESSAGE_CREATE: 频道私信 (1<<30) - 频道私信（如使用频道功能）
+    # 注意：QQ Bot v2 使用这些新 intents，不是旧版的 GUILD_MESSAGES
     intents:
-      - "GUILD_MESSAGES"
-      - "DIRECT_MESSAGE"
+      - "C2C_MESSAGE_CREATE"
+      - "GROUP_AT_MESSAGE_CREATE"
 
   # ==================== 飞书渠道 ====================
   # 前置条件:
