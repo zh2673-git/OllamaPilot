@@ -162,9 +162,9 @@ class SkillSelectorMiddleware(AgentMiddleware):
         skill = self._select_skill(query)
 
         if skill:
-            # 注：Skill 激活日志现在在 agent.invoke() 中打印，避免重复
-            # if self.verbose:
-            #     print(f"🎯 激活 Skill: {skill.name}")
+            # 打印 Skill 激活日志
+            if self.verbose:
+                print(f"🎯 激活 Skill: {skill.name}")
 
             # 记录当前激活的 Skill
             self._active_skill = skill.name
@@ -235,10 +235,52 @@ class ToolLoggingMiddleware(AgentMiddleware):
 
     def wrap_tool_call(self, request: Any, handler: Any) -> Any:
         """
-        包装工具调用，添加日志
+        包装工具调用，添加日志（同步版本）
 
         Args:
             request: 工具调用请求 (ToolCallRequest)
+            handler: 处理函数
+
+        Returns:
+            工具调用结果
+        """
+        return self._log_tool_call(request, handler)
+
+    async def awrap_tool_call(self, request: Any, handler: Any) -> Any:
+        """
+        包装工具调用，添加日志（异步版本）
+
+        Args:
+            request: 工具调用请求 (ToolCallRequest)
+            handler: 异步处理函数
+
+        Returns:
+            工具调用结果
+        """
+        if self.verbose:
+            # 从 request.tool_call 获取工具调用信息
+            tool_call = getattr(request, "tool_call", {})
+            tool_name = tool_call.get("name", "unknown") if isinstance(tool_call, dict) else getattr(tool_call, "name", "unknown")
+            tool_args = tool_call.get("args", {}) if isinstance(tool_call, dict) else getattr(tool_call, "args", {})
+            print(f"🔧 执行工具: {tool_name}({tool_args})")
+
+        # 异步调用 handler
+        result = await handler(request)
+
+        if self.verbose:
+            result_preview = str(result)[:200]
+            if len(str(result)) > 200:
+                result_preview += "..."
+            print(f"   ✅ 结果: {result_preview}")
+
+        return result
+
+    def _log_tool_call(self, request: Any, handler: Any) -> Any:
+        """
+        工具调用日志的核心逻辑（同步版本）
+
+        Args:
+            request: 工具调用请求
             handler: 处理函数
 
         Returns:

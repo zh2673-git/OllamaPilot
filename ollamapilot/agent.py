@@ -192,11 +192,6 @@ class OllamaPilotAgent:
         if self.verbose:
             print(f"🤖 用户: {query}")
 
-        # 手动选择 Skill 并显示日志（确保在 invoke 前显示）
-        skill = self._select_skill_for_query(query)
-        if skill and self.verbose:
-            print(f"🎯 激活 Skill: {skill.name}")
-
         # 配置
         config = {"configurable": {"thread_id": thread_id or "default"}}
 
@@ -259,6 +254,31 @@ class OllamaPilotAgent:
             config
         ):
             yield chunk
+
+    async def astream_events(self, query: str, thread_id: Optional[str] = None):
+        """
+        异步流式事件输出 - 使用 LangChain 原生 astream_events
+
+        提供结构化的事件流，包括：
+        - on_tool_start: 工具开始执行
+        - on_tool_end: 工具执行结束
+        - on_chat_model_stream: 模型流式输出
+
+        Args:
+            query: 用户输入
+            thread_id: 对话线程 ID
+
+        Yields:
+            事件字典，包含 event, name, data 等字段
+        """
+        config = {"configurable": {"thread_id": thread_id or "default"}}
+
+        async for event in self.agent.astream_events(
+            {"messages": [HumanMessage(content=query)]},
+            config,
+            version="v1"
+        ):
+            yield event
 
     def get_history(self, thread_id: Optional[str] = None) -> List[Any]:
         """

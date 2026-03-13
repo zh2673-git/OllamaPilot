@@ -8,6 +8,7 @@ import sys
 import uuid
 import glob
 import time
+import asyncio
 import threading
 from pathlib import Path
 from datetime import datetime
@@ -756,12 +757,15 @@ class OllamaPilotChat:
         print("\n助手: ", end="", flush=True)
 
         full_response = ""
-        has_output = False
+        has_content = False
+        tool_call_count = 0
         start_time = time.time()
         timeout = self.config.cli_timeout  # 从配置读取超时时间，默认 120 秒
 
-        try:
-            for chunk in self.agent.stream(user_input, thread_id=self.current_session_id):
+        async def _process_stream():
+            nonlocal full_response, has_content, tool_call_count
+            
+            async for event in self.agent.astream_events(user_input, thread_id=self.current_session_id):
                 # 检查超时
                 if time.time() - start_time > timeout:
                     print(f"\n\n⏰ 响应超时（{timeout}秒）")
@@ -769,35 +773,45 @@ class OllamaPilotChat:
                     print(f"   提示: 可通过 .env 文件设置 CLI_TIMEOUT 调整超时时间\n")
                     return
 
-                if isinstance(chunk, dict):
-                    content = None
-                    if "messages" in chunk:
-                        messages = chunk["messages"]
-                        if messages and hasattr(messages[-1], "content"):
-                            content = messages[-1].content
-                    elif "content" in chunk:
-                        content = chunk["content"]
-                    elif "agent" in chunk and "messages" in chunk["agent"]:
-                        messages = chunk["agent"]["messages"]
-                        if messages and hasattr(messages[-1], "content"):
-                            content = messages[-1].content
+                event_type = event.get("event", "")
+                
+                # 工具开始执行
+                if event_type == "on_tool_start":
+                    tool_name = event.get("name", "unknown")
+                    tool_call_count += 1
+                    print(f"\n🔧 执行工具: {tool_name}...", end="", flush=True)
+                
+                # 工具执行结束
+                elif event_type == "on_tool_end":
+                    print(" ✅", end="", flush=True)
+                
+                # 模型流式输出
+                elif event_type == "on_chat_model_stream":
+                    data = event.get("data", {})
+                    chunk = data.get("chunk", None)
+                    if chunk and hasattr(chunk, "content"):
+                        content = chunk.content
+                        if content:
+                            print(content, end="", flush=True)
+                            full_response += content
+                            has_content = True
 
-                    if content and len(content) > len(full_response):
-                        new_text = content[len(full_response):]
-                        if new_text.strip():
-                            print(new_text, end="", flush=True)
-                            has_output = True
-                        full_response = content
-
-            if has_output:
-                print("\n")
+        try:
+            # 运行异步流处理
+            # 使用 get_event_loop() 而不是 asyncio.run() 避免嵌套事件循环问题
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(_process_stream())
             else:
-                print("\n⏳ 生成回答中...")
-                response = self.agent.invoke(user_input, thread_id=self.current_session_id)
-                if response:
-                    print(f"{response}\n")
-                else:
-                    print("（无回答）\n")
+                loop.run_until_complete(_process_stream())
+            
+            if has_content:
+                print("\n")
+            elif tool_call_count > 0:
+                # 有工具调用但没有内容输出（可能是工具执行后没有生成回复）
+                print("\n（工具执行完成，但没有生成回复内容）\n")
+            else:
+                print("（无回答）\n")
 
         except KeyboardInterrupt:
             print("\n\n⚠️ 用户中断")
@@ -805,13 +819,7 @@ class OllamaPilotChat:
             return
 
         except Exception as e:
-            print(f"\n⚠️ 流式输出失败，使用普通模式: {e}\n")
-            try:
-                response = self.agent.invoke(user_input, thread_id=self.current_session_id)
-                if response:
-                    print(f"助手: {response}\n")
-            except KeyboardInterrupt:
-                print("\n\n⚠️ 用户中断")
-                print("   如需退出程序，请输入 'quit' 或 'exit'\n")
-            except Exception as e2:
-                print(f"❌ 调用失败: {e2}\n")
+            print(f"\n⚠️ 流式输出失败: {e}\n")
+            # 注意：不再回退到 invoke，因为 astream_events 已经消耗了消息历史
+            # 如果回退会导致：1. 工具重复执行 2. 回答重复打印
+            print("   提示: 如需重新回答，请再次输入问题\n")
