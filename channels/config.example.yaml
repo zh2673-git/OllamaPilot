@@ -1,0 +1,134 @@
+# ============================================
+# OllamaPilot Channels 配置文件模板
+# ============================================
+# 
+# 使用说明:
+#   1. 复制此文件为 config.yaml
+#   2. 根据你的平台配置填写实际值
+#   3. 运行: python -m channels.runner
+#
+# 重要: config.yaml 包含敏感信息，已加入 .gitignore，请勿提交到版本控制！
+
+agent:
+  # 对话模型名称（Ollama 支持的模型）
+  model: "qwen3.5:4b"
+
+  # Skill 目录路径
+  skills_dir: "./skills"
+
+  # 是否显示详细日志
+  verbose: true
+
+  # 消息处理工作者数量
+  max_workers: 5
+
+global:
+  # 全局白名单（所有渠道生效）
+  # 为空数组 [] 表示允许所有用户
+  # 示例: ["123456789", "987654321"]
+  whitelist: []
+
+  # 管理员用户列表
+  admin_users: []
+
+  # 最大消息长度
+  max_message_length: 4000
+
+channels:
+  # ==================== QQ 渠道 ====================
+  # 前置条件:
+  #   1. 访问 https://q.qq.com/ 登录 QQ 开放平台
+  #   2. 创建应用（需要个人实名认证）
+  #   3. 获取 AppID、AppSecret、Token
+  #   4. 配置机器人能力
+  qq:
+    enabled: false
+
+    # 从 QQ 开放平台获取
+    app_id: "YOUR_APP_ID"
+    app_secret: "YOUR_APP_SECRET"
+    token: "YOUR_TOKEN"
+
+    # 是否使用沙箱环境（测试用）
+    sandbox: false
+
+    # 白名单（仅允许这些 QQ 号使用）
+    whitelist:
+      - "YOUR_QQ_NUMBER"
+
+    # 群聊中只响应 @机器人的消息
+    at_only_in_group: true
+
+    # 订阅的事件类型
+    intents:
+      - "GUILD_MESSAGES"
+      - "DIRECT_MESSAGE"
+
+  # ==================== 飞书渠道 ====================
+  # 前置条件:
+  #   1. 访问 https://open.feishu.cn/ 登录飞书开放平台
+  #   2. 创建企业自建应用
+  #   3. 开启"机器人"能力
+  #   4. 获取 App ID 和 App Secret
+  #   5. 配置事件订阅（需要公网可访问的 Webhook URL）
+  feishu:
+    enabled: false
+
+    # 从飞书开放平台获取
+    app_id: "YOUR_APP_ID"
+    app_secret: "YOUR_APP_SECRET"
+
+    # 消息加密密钥（可选，用于加密消息）
+    encrypt_key: ""
+
+    # 验证 Token（用于验证 Webhook 请求）
+    verification_token: ""
+
+    # 白名单（使用用户的 OpenID）
+    whitelist: []
+
+    # 群聊中只响应 @机器人的消息
+    at_only_in_group: true
+
+  # ==================== 钉钉渠道 ====================
+  # 前置条件:
+  #   1. 访问 https://open.dingtalk.com/ 登录钉钉开放平台
+  #   2. 创建企业内部应用
+  #   3. 添加"机器人"能力
+  #   4. 获取 App Key 和 App Secret
+  #   5. 配置回调 URL（需要公网可访问）
+  dingtalk:
+    enabled: false
+
+    # 从钉钉开放平台获取
+    app_key: "YOUR_APP_KEY"
+    app_secret: "YOUR_APP_SECRET"
+
+    # 机器人编码（可选）
+    robot_code: ""
+
+    # 企业内部应用 Agent ID
+    agent_id: ""
+
+    # Webhook Token（用于发送群消息）
+    webhook_token: ""
+
+    # 白名单（使用用户的 UserID）
+    whitelist: []
+
+    # 群聊中只响应 @机器人的消息
+    at_only_in_group: true
+
+# ==================== 日志配置 ====================
+logging:
+  # 日志级别: DEBUG | INFO | WARNING | ERROR
+  level: "INFO"
+
+  # 日志文件路径
+  file: "logs/channels.log"
+
+  # 单个日志文件最大字节数（默认 10MB）
+  max_bytes: 10485760
+
+  # 保留的日志文件数量
+  backup_count: 5

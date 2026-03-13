@@ -160,3 +160,7 @@ data/
 
 # Release notes (local only)
 RELEASE_*.md
+
+# Channel config (contains sensitive info)
+channels/config.yaml
+logs/

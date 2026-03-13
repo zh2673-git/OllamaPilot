@@ -17,8 +17,10 @@ from typing import Any, Dict, List, Optional
 import aiohttp
 
 from .base import Channel, ChannelMessage, ChannelAPIError
+from .registry import register_channel
 
 
+@register_channel
 class FeishuChannel(Channel):
     """
     飞书 Bot 渠道
@@ -97,13 +99,12 @@ class FeishuChannel(Channel):
     
     async def send_message(self, user_id: str, content: str, **kwargs) -> bool:
         """
-        发送消息
+        发送私聊消息
         
         Args:
             user_id: 用户 OpenID
             content: 消息内容
             **kwargs:
-                - chat_id: 群聊 ID
                 - msg_type: 消息类型 (text/post/card)
         
         Returns:
@@ -113,26 +114,41 @@ class FeishuChannel(Channel):
             return True
         
         try:
-            # 确保 token 有效
             await self._ensure_token()
-            
-            if kwargs.get("chat_id"):
-                # 发送群消息
-                return await self._send_group_message(
-                    chat_id=kwargs["chat_id"],
-                    content=content,
-                    msg_type=kwargs.get("msg_type", "text")
-                )
-            else:
-                # 发送私聊消息
-                return await self._send_private_message(
-                    user_id=user_id,
-                    content=content,
-                    msg_type=kwargs.get("msg_type", "text")
-                )
-        
+            return await self._send_private_message(
+                user_id=user_id,
+                content=content,
+                msg_type=kwargs.get("msg_type", "text")
+            )
         except Exception as e:
             print(f"❌ 发送飞书消息失败: {e}")
+            return False
+    
+    async def send_group_message(self, group_id: str, content: str, **kwargs) -> bool:
+        """
+        发送群消息
+        
+        Args:
+            group_id: 群聊 ID (chat_id)
+            content: 消息内容
+            **kwargs:
+                - msg_type: 消息类型 (text/post/card)
+        
+        Returns:
+            是否发送成功
+        """
+        if not content:
+            return True
+        
+        try:
+            await self._ensure_token()
+            return await self._send_group_message(
+                chat_id=group_id,
+                content=content,
+                msg_type=kwargs.get("msg_type", "text")
+            )
+        except Exception as e:
+            print(f"❌ 发送飞书群消息失败: {e}")
             return False
     
     async def _send_private_message(self, user_id: str, content: str, msg_type: str = "text") -> bool:

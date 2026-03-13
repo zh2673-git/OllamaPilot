@@ -11,12 +11,19 @@ OllamaPilot Channels - 多渠道远程控制模块
 示例配置见 config.yaml
 """
 
-from .base import Channel, ChannelMessage
+from .base import Channel, ChannelMessage, ChannelResponse, ChannelError
+from .registry import register_channel, get_channel, list_channels, auto_discover_channels
 from .runner import ChannelRunner
 
 __version__ = "1.0.0"
 __all__ = [
     "Channel",
     "ChannelMessage",
+    "ChannelResponse",
+    "ChannelError",
+    "register_channel",
+    "get_channel",
+    "list_channels",
+    "auto_discover_channels",
     "ChannelRunner",
 ]

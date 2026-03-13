@@ -19,8 +19,10 @@ from typing import Any, Dict, List, Optional
 import aiohttp
 
 from .base import Channel, ChannelMessage, ChannelAPIError
+from .registry import register_channel
 
 
+@register_channel
 class DingTalkChannel(Channel):
     """
     钉钉 Bot 渠道
@@ -91,42 +93,82 @@ class DingTalkChannel(Channel):
 
     async def send_message(self, user_id: str, content: str, **kwargs) -> bool:
         """
-        发送消息
-
+        发送私聊消息
+        
         Args:
-            user_id: 用户 UserID（钉钉中实际使用 open_conversation_id）
+            user_id: 用户 UserID
             content: 消息内容
             **kwargs:
-                - chat_id: 群聊 ID (open_conversation_id)
                 - msg_type: 消息类型 (text/markdown)
-                - at_users: @用户列表
-
+        
         Returns:
             是否发送成功
         """
         if not content:
             return True
-
+        
         try:
-            # 确保 token 有效
             await self._ensure_token()
-
-            chat_id = kwargs.get("chat_id", user_id)
-            msg_type = kwargs.get("msg_type", "text")
-            at_users = kwargs.get("at_users", [])
-
-            return await self._send_group_message(
-                chat_id=chat_id,
-                content=content,
-                msg_type=msg_type,
-                at_users=at_users
-            )
-
+            return await self._send_to_user(user_id, content, kwargs.get("msg_type", "text"))
         except Exception as e:
             print(f"❌ 发送钉钉消息失败: {e}")
             return False
+    
+    async def send_group_message(self, group_id: str, content: str, **kwargs) -> bool:
+        """
+        发送群消息
+        
+        Args:
+            group_id: 群聊 ID (open_conversation_id)
+            content: 消息内容
+            **kwargs:
+                - msg_type: 消息类型 (text/markdown)
+                - at_users: @用户列表
+        
+        Returns:
+            是否发送成功
+        """
+        if not content:
+            return True
+        
+        try:
+            await self._ensure_token()
+            return await self._send_group_message_impl(
+                chat_id=group_id,
+                content=content,
+                msg_type=kwargs.get("msg_type", "text"),
+                at_users=kwargs.get("at_users", [])
+            )
+        except Exception as e:
+            print(f"❌ 发送钉钉群消息失败: {e}")
+            return False
+    
+    async def _send_to_user(self, user_id: str, content: str, msg_type: str = "text") -> bool:
+        """发送私信给用户"""
+        url = f"{self.BASE_URL}/topapi/message/corpconversation/asyncsend_v2"
+        
+        params = {"access_token": self._access_token}
+        
+        if msg_type == "markdown":
+            content_json = {"title": "消息", "text": content}
+        else:
+            content_json = {"content": content}
+        
+        data = {
+            "agent_id": self.config.get("agent_id", ""),
+            "userid_list": user_id,
+            "msgtype": msg_type,
+            msg_type: content_json
+        }
+        
+        async with self.session.post(url, params=params, json=data) as resp:
+            result = await resp.json()
+            if result.get("errcode") != 0:
+                print(f"⚠️ 发送钉钉私信失败: {result.get('errmsg', '未知错误')}")
+                return False
+            return True
 
-    async def _send_group_message(
+    async def _send_group_message_impl(
         self,
         chat_id: str,
         content: str,

@@ -1,40 +1,54 @@
 """
 QQ Bot 渠道实现
 
-基于 go-cqhttp 的 HTTP API 和 WebSocket 接口。
-支持私聊、群聊、图片消息、@触发等功能。
+基于 QQ 开放平台官方 Bot API。
+支持私聊、群聊、频道消息、@触发等功能。
 
-go-cqhttp 文档: https://docs.go-cqhttp.org/
+QQ 开放平台: https://q.qq.com/
 """
 
 import asyncio
-import json
-from datetime import datetime
+import hashlib
+import hmac
+import time
 from typing import Any, Dict, List, Optional
 
 import aiohttp
 
-from .base import Channel, ChannelMessage, ChannelAPIError
+from .base import Channel, ChannelMessage, ChannelResponse
+from .registry import register_channel
 
 
+@register_channel
 class QQChannel(Channel):
     """
     QQ Bot 渠道
     
-    基于 go-cqhttp 实现，需要提前部署 go-cqhttp 服务。
+    基于 QQ 开放平台官方 API 实现。
+    支持私聊、群聊、频道消息。
     
     功能特性:
         - 私聊消息收发
         - 群聊消息收发（支持 @触发）
-        - 图片消息支持
-        - 长消息自动拆分（QQ限制2000字符）
+        - 频道消息支持
+        - 富文本消息（Markdown、图片）
+        - 消息按钮/卡片
+        - 长消息自动拆分
+    
+    配置项:
+        - app_id: QQ 开放平台 AppID
+        - app_secret: QQ 开放平台 AppSecret
+        - token: 消息验证 Token
+        - sandbox: 是否使用沙箱环境
+        - whitelist: 用户 ID 白名单
+        - at_only_in_group: 群聊中是否只响应 @消息
     
     Example:
         >>> config = {
-        ...     "api_url": "http://127.0.0.1:5700",
-        ...     "ws_url": "ws://127.0.0.1:5701",
-        ...     "bot_qq": "123456789",
-        ...     "whitelist": ["987654321"],
+        ...     "app_id": "1024xxxxxx",
+        ...     "app_secret": "xxxxxxxxxx",
+        ...     "token": "xxxxxxxxxx",
+        ...     "whitelist": ["123456789"],
         ...     "at_only_in_group": True
         ... }
         >>> channel = QQChannel(config, message_handler)
@@ -42,200 +56,187 @@ class QQChannel(Channel):
     """
     
     name = "qq"
-    description = "QQ Bot 渠道，基于 go-cqhttp"
+    description = "QQ Bot 渠道，基于 QQ 开放平台官方 API"
     
-    # QQ 消息长度限制
     MAX_MESSAGE_LENGTH = 2000
     
     def __init__(self, config: Dict[str, Any], message_handler):
         super().__init__(config, message_handler)
-        self.api_url = config.get("api_url", "http://127.0.0.1:5700").rstrip("/")
-        self.ws_url = config.get("ws_url", "ws://127.0.0.1:5701")
-        self.bot_qq = str(config.get("bot_qq", ""))
+        self.app_id = config.get("app_id", "")
+        self.app_secret = config.get("app_secret", "")
+        self.token = config.get("token", "")
+        self.sandbox = config.get("sandbox", False)
         self.at_only_in_group = config.get("at_only_in_group", True)
+        self.intents = config.get("intents", ["DIRECT_MESSAGE", "GUILD_MESSAGES"])
         
         self.session: Optional[aiohttp.ClientSession] = None
-        self.ws: Optional[aiohttp.ClientWebSocketResponse] = None
-        self._heartbeat_task: Optional[asyncio.Task] = None
+        self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
+        self._ws_task: Optional[asyncio.Task] = None
+        self._token_expires_at = 0
+        self._access_token = ""
+        
+        self._api_base = "https://api.sandbox.qq.com" if self.sandbox else "https://api.q.qq.com"
     
     async def start(self):
         """启动 QQ Bot"""
         self.session = aiohttp.ClientSession()
         self._running = True
         
-        # 启动 WebSocket 监听
+        await self._refresh_access_token()
+        
         self._create_task(self._ws_listener())
         
-        print(f"✅ QQ Bot 已启动 (Bot QQ: {self.bot_qq})")
-        print(f"   API: {self.api_url}")
-        print(f"   WebSocket: {self.ws_url}")
+        print(f"✅ QQ Bot 已启动 (AppID: {self.app_id})")
+        print(f"   API: {self._api_base}")
     
     async def stop(self):
         """停止 QQ Bot"""
         self._running = False
         
-        # 取消心跳任务
-        if self._heartbeat_task and not self._heartbeat_task.done():
-            self._heartbeat_task.cancel()
+        if self._ws_task and not self._ws_task.done():
+            self._ws_task.cancel()
             try:
-                await self._heartbeat_task
+                await self._ws_task
             except asyncio.CancelledError:
                 pass
         
-        # 关闭 WebSocket
-        if self.ws and not self.ws.closed:
-            await self.ws.close()
+        if self._ws and not self._ws.closed:
+            await self._ws.close()
         
-        # 关闭 Session
         if self.session:
             await self.session.close()
         
-        # 取消所有后台任务
         await self._cancel_all_tasks()
         
         print("⏹️ QQ Bot 已停止")
     
+    async def _refresh_access_token(self):
+        """刷新访问令牌"""
+        if time.time() < self._token_expires_at - 300:
+            return
+        
+        url = f"{self._api_base}/oauth2/token"
+        params = {
+            "grant_type": "client_credential",
+            "client_id": self.app_id,
+            "client_secret": self.app_secret
+        }
+        
+        async with self.session.get(url, params=params) as resp:
+            data = await resp.json()
+            
+            if "access_token" in data:
+                self._access_token = data["access_token"]
+                self._token_expires_at = time.time() + data.get("expires_in", 7200)
+                print("🔑 QQ 访问令牌已刷新")
+            else:
+                print(f"⚠️ 获取访问令牌失败: {data}")
+    
     async def send_message(self, user_id: str, content: str, **kwargs) -> bool:
-        """
-        发送消息
-        
-        Args:
-            user_id: 用户QQ号
-            content: 消息内容
-            **kwargs:
-                - group_id: 群号（发送群消息时）
-                - reply_to: 回复的消息ID
-        
-        Returns:
-            是否发送成功
-        """
+        """发送私聊消息"""
         if not content:
             return True
         
-        # 长消息拆分
         messages = self._split_message(content)
         
         for msg in messages:
-            try:
-                if kwargs.get("group_id"):
-                    # 发送群消息
-                    success = await self._send_group_msg(
-                        group_id=kwargs["group_id"],
-                        message=msg,
-                        reply_to=kwargs.get("reply_to")
-                    )
-                else:
-                    # 发送私聊消息
-                    success = await self._send_private_msg(
-                        user_id=user_id,
-                        message=msg,
-                        reply_to=kwargs.get("reply_to")
-                    )
-                
-                if not success:
-                    return False
-                
-                # 避免发送过快
-                if len(messages) > 1:
-                    await asyncio.sleep(0.5)
-                    
-            except Exception as e:
-                print(f"❌ 发送消息失败: {e}")
+            success = await self._send_direct_message(user_id, msg)
+            if not success:
                 return False
+            
+            if len(messages) > 1:
+                await asyncio.sleep(0.5)
         
         return True
     
-    async def _send_private_msg(self, user_id: str, message: str, reply_to: Optional[str] = None) -> bool:
-        """发送私聊消息"""
-        url = f"{self.api_url}/send_private_msg"
-        
-        # 构建消息段
-        message_segments = [{"type": "text", "data": {"text": message}}]
-        
-        # 如果是回复消息
-        if reply_to:
-            message_segments.insert(0, {
-                "type": "reply",
-                "data": {"id": reply_to}
-            })
-        
-        data = {
-            "user_id": int(user_id),
-            "message": message_segments,
-            "auto_escape": False
-        }
-        
-        async with self.session.post(url, json=data) as resp:
-            result = await resp.json()
-            if result.get("status") != "ok":
-                print(f"⚠️ 发送私聊消息失败: {result.get('msg', '未知错误')}")
-                return False
-            return True
-    
-    async def _send_group_msg(self, group_id: str, message: str, reply_to: Optional[str] = None) -> bool:
+    async def send_group_message(self, group_id: str, content: str, **kwargs) -> bool:
         """发送群消息"""
-        url = f"{self.api_url}/send_group_msg"
+        if not content:
+            return True
         
-        # 构建消息段
-        message_segments = [{"type": "text", "data": {"text": message}}]
+        messages = self._split_message(content)
         
-        # 如果是回复消息
-        if reply_to:
-            message_segments.insert(0, {
-                "type": "reply",
-                "data": {"id": reply_to}
-            })
+        for msg in messages:
+            success = await self._send_group_message_impl(group_id, msg)
+            if not success:
+                return False
+            
+            if len(messages) > 1:
+                await asyncio.sleep(0.5)
         
+        return True
+    
+    async def _send_direct_message(self, user_id: str, content: str) -> bool:
+        """发送私信"""
+        await self._refresh_access_token()
+        
+        url = f"{self._api_base}/v2/users/{self.app_id}/members/{user_id}/messages"
+        headers = {
+            "Authorization": f"Bearer {self._access_token}",
+            "Content-Type": "application/json"
+        }
         data = {
-            "group_id": int(group_id),
-            "message": message_segments,
-            "auto_escape": False
+            "content": content
         }
         
-        async with self.session.post(url, json=data) as resp:
-            result = await resp.json()
-            if result.get("status") != "ok":
-                print(f"⚠️ 发送群消息失败: {result.get('msg', '未知错误')}")
-                return False
-            return True
+        try:
+            async with self.session.post(url, json=data, headers=headers) as resp:
+                if resp.status == 200:
+                    return True
+                else:
+                    text = await resp.text()
+                    print(f"⚠️ 发送私信失败: {resp.status} - {text}")
+                    return False
+        except Exception as e:
+            print(f"⚠️ 发送私信异常: {e}")
+            return False
+    
+    async def _send_group_message_impl(self, group_id: str, content: str) -> bool:
+        """发送群消息"""
+        await self._refresh_access_token()
+        
+        url = f"{self._api_base}/v2/groups/{group_id}/messages"
+        headers = {
+            "Authorization": f"Bearer {self._access_token}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "content": content
+        }
+        
+        try:
+            async with self.session.post(url, json=data, headers=headers) as resp:
+                if resp.status == 200:
+                    return True
+                else:
+                    text = await resp.text()
+                    print(f"⚠️ 发送群消息失败: {resp.status} - {text}")
+                    return False
+        except Exception as e:
+            print(f"⚠️ 发送群消息异常: {e}")
+            return False
     
     def _split_message(self, content: str, max_length: int = None) -> List[str]:
-        """
-        拆分长消息
-        
-        QQ 单条消息限制 2000 字符，超过需要拆分。
-        
-        Args:
-            content: 消息内容
-            max_length: 最大长度，默认 MAX_MESSAGE_LENGTH
-        
-        Returns:
-            拆分后的消息列表
-        """
+        """拆分长消息"""
         if max_length is None:
             max_length = self.MAX_MESSAGE_LENGTH
         
         if len(content) <= max_length:
             return [content]
         
-        # 按段落拆分，尽量保持完整段落
         paragraphs = content.split("\n")
         messages = []
         current_msg = ""
         
         for para in paragraphs:
-            # 如果当前段落本身超过限制，需要强制拆分
             if len(para) > max_length:
                 if current_msg:
                     messages.append(current_msg)
                     current_msg = ""
-                
-                # 强制拆分段落
                 for i in range(0, len(para), max_length):
                     messages.append(para[i:i + max_length])
                 continue
             
-            # 检查添加当前段落后是否超过限制
             if len(current_msg) + len(para) + 1 > max_length:
                 messages.append(current_msg)
                 current_msg = para
@@ -244,7 +245,6 @@ class QQChannel(Channel):
                     current_msg += "\n"
                 current_msg += para
         
-        # 添加最后一条
         if current_msg:
             messages.append(current_msg)
         
@@ -254,8 +254,10 @@ class QQChannel(Channel):
         """WebSocket 消息监听"""
         while self._running:
             try:
-                async with self.session.ws_connect(self.ws_url) as ws:
-                    self.ws = ws
+                ws_url = f"{self._api_base}/v2/ws"
+                
+                async with self.session.ws_connect(ws_url) as ws:
+                    self._ws = ws
                     print("🔗 QQ WebSocket 已连接")
                     
                     async for msg in ws:
@@ -264,10 +266,10 @@ class QQChannel(Channel):
                         
                         if msg.type == aiohttp.WSMsgType.TEXT:
                             try:
-                                data = json.loads(msg.data)
+                                data = msg.json()
                                 await self._handle_event(data)
-                            except json.JSONDecodeError:
-                                print(f"⚠️ 收到无效的 JSON: {msg.data[:100]}")
+                            except Exception as e:
+                                print(f"⚠️ 解析消息失败: {e}")
                         
                         elif msg.type == aiohttp.WSMsgType.ERROR:
                             print(f"⚠️ WebSocket 错误: {ws.exception()}")
@@ -287,130 +289,87 @@ class QQChannel(Channel):
                 await asyncio.sleep(5)
     
     async def _handle_event(self, data: Dict[str, Any]):
-        """处理 QQ 事件"""
-        post_type = data.get("post_type")
+        """处理事件"""
+        event_type = data.get("type")
         
-        if post_type == "message":
-            # 消息事件
-            await self._handle_message_event(data)
-        
-        elif post_type == "meta_event":
-            # 元事件（心跳等）
-            pass
-        
-        elif post_type == "notice":
-            # 通知事件
-            pass
-        
-        elif post_type == "request":
-            # 请求事件
-            pass
+        if event_type == "MESSAGE_CREATE":
+            await self._handle_message_create(data)
+        elif event_type == "DIRECT_MESSAGE_CREATE":
+            await self._handle_direct_message(data)
     
-    async def _handle_message_event(self, data: Dict[str, Any]):
-        """处理消息事件"""
-        message_type = data.get("message_type")
+    async def _handle_message_create(self, data: Dict[str, Any]):
+        """处理频道消息"""
+        channel_id = data.get("channel_id", "")
+        guild_id = data.get("guild_id", "")
+        message_data = data.get("msg", {})
         
-        if message_type == "private":
-            await self._handle_private_message(data)
-        elif message_type == "group":
-            await self._handle_group_message(data)
-    
-    async def _handle_private_message(self, data: Dict[str, Any]):
-        """处理私聊消息"""
-        # 解析消息
-        message = self._parse_message(data)
+        message = self._parse_message(message_data, "channel", channel_name=guild_id)
+        message.group_id = channel_id
         
-        print(f"📨 [QQ私聊] {message.user_name}({message.user_id}): {message.content[:50]}...")
+        print(f"📨 [QQ频道:{channel_id}] {message.user_name}({message.user_id}): {message.content[:50]}...")
         
-        # 处理消息
         response = await self.handle_message(message)
         
         if response:
-            # 发送回复
-            await self.send_message(
-                user_id=message.user_id,
-                content=response,
-                reply_to=message.message_id
-            )
+            await self.send_message(message.user_id, response)
     
-    async def _handle_group_message(self, data: Dict[str, Any]):
-        """处理群聊消息"""
-        # 解析消息
-        message = self._parse_message(data)
+    async def _handle_direct_message(self, data: Dict[str, Any]):
+        """处理私信"""
+        message_data = data.get("msg", {})
         
-        # 检查是否@机器人
-        if self.at_only_in_group and not message.at_me:
-            return
+        message = self._parse_message(message_data, "private")
         
-        print(f"📨 [QQ群:{message.group_id}] {message.user_name}({message.user_id}): {message.content[:50]}...")
+        print(f"📨 [QQ私信] {message.user_name}({message.user_id}): {message.content[:50]}...")
         
-        # 处理消息
         response = await self.handle_message(message)
         
         if response:
-            # 发送回复
-            await self.send_message(
-                user_id=message.user_id,
-                content=response,
-                group_id=message.group_id,
-                reply_to=message.message_id
-            )
+            await self.send_message(message.user_id, response)
     
-    def _parse_message(self, data: Dict[str, Any]) -> ChannelMessage:
-        """解析 QQ 消息为标准格式"""
-        message_type = data.get("message_type", "private")
+    def _parse_message(self, data: Dict[str, Any], message_type: str, **kwargs) -> ChannelMessage:
+        """解析消息为标准格式"""
+        author = data.get("author", {})
         
-        # 提取纯文本内容
-        content, at_me = self._extract_text_and_check_at(data.get("message", []))
+        content = data.get("content", "")
+        mentions = data.get("mentions", [])
         
-        # 提取图片
-        images = self._extract_images(data.get("message", []))
+        at_me = False
+        for mention in mentions:
+            if mention.get("id") == self.app_id:
+                at_me = True
+                break
+        
+        images = []
+        attachments = data.get("attachments", [])
+        for att in attachments:
+            if att.get("content_type", "").startswith("image/"):
+                images.append(att.get("url", ""))
         
         return ChannelMessage(
-            message_id=str(data.get("message_id", "")),
-            user_id=str(data.get("user_id", "")),
-            user_name=data.get("sender", {}).get("nickname", ""),
+            message_id=str(data.get("id", "")),
+            user_id=str(author.get("id", "")),
+            user_name=author.get("username", author.get("nick", "")),
             content=content,
             message_type=message_type,
-            group_id=str(data.get("group_id", "")) if message_type == "group" else None,
+            channel_name="qq",
+            group_id=kwargs.get("group_id"),
+            group_name=kwargs.get("channel_name"),
             raw_data=data,
-            timestamp=datetime.now(),
             images=images,
-            at_me=at_me
+            at_me=at_me,
+            reply_to=str(data.get("message_reference", {}).get("message_id", ""))
         )
     
-    def _extract_text_and_check_at(self, message_segments: List[Dict]) -> tuple:
-        """
-        从消息段中提取文本并检查是否@机器人
+    def verify_webhook(self, timestamp: str, signature: str, body: bytes) -> bool:
+        """验证 Webhook 签名"""
+        if not self.token:
+            return True
         
-        Returns:
-            (text, at_me)
-        """
-        texts = []
-        at_me = False
+        sign_str = f"{timestamp}{body.decode()}{self.token}"
+        expected = hmac.new(
+            self.token.encode(),
+            sign_str.encode(),
+            hashlib.sha256
+        ).hexdigest()
         
-        for seg in message_segments:
-            seg_type = seg.get("type")
-            seg_data = seg.get("data", {})
-            
-            if seg_type == "text":
-                texts.append(seg_data.get("text", ""))
-            
-            elif seg_type == "at":
-                # 检查是否@机器人
-                if str(seg_data.get("qq", "")) == self.bot_qq:
-                    at_me = True
-        
-        return " ".join(texts).strip(), at_me
-    
-    def _extract_images(self, message_segments: List[Dict]) -> List[str]:
-        """从消息段中提取图片URL"""
-        images = []
-        
-        for seg in message_segments:
-            if seg.get("type") == "image":
-                url = seg.get("data", {}).get("url", "")
-                if url:
-                    images.append(url)
-        
-        return images
+        return signature == expected

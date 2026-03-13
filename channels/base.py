@@ -25,28 +25,53 @@ class ChannelMessage:
         user_id: 发送者ID（各平台的用户标识）
         user_name: 发送者昵称
         content: 消息内容（纯文本）
-        message_type: 消息类型，"private" 或 "group"
+        message_type: 消息类型，"private" 或 "group" 或 "channel"
+        channel_name: 渠道名称（qq, feishu, dingtalk）
         group_id: 群ID（群聊时）
+        group_name: 群名称
         raw_data: 原始消息数据（保留用于调试和扩展）
         timestamp: 消息时间
         images: 图片URL列表
         at_me: 是否@机器人
+        reply_to: 回复的消息ID
     """
     message_id: str
     user_id: str
     user_name: str
     content: str
-    message_type: str  # "private" | "group"
+    message_type: str  # "private" | "group" | "channel"
+    channel_name: str = "unknown"  # 渠道名称
     group_id: Optional[str] = None
+    group_name: Optional[str] = None
     raw_data: Any = None
     timestamp: datetime = field(default_factory=datetime.now)
     images: List[str] = field(default_factory=list)
     at_me: bool = False
+    reply_to: Optional[str] = None
     
     def __post_init__(self):
         """验证消息类型"""
-        if self.message_type not in ("private", "group"):
-            raise ValueError(f"message_type 必须是 'private' 或 'group'， got {self.message_type}")
+        valid_types = ("private", "group", "channel")
+        if self.message_type not in valid_types:
+            raise ValueError(f"message_type 必须是 {valid_types}， got {self.message_type}")
+
+
+@dataclass
+class ChannelResponse:
+    """
+    渠道响应格式
+    
+    用于规范化渠道回复内容的格式。
+    """
+    content: str
+    message_type: str = "text"  # text | markdown | image | card
+    buttons: Optional[List[Dict]] = None
+    image_url: Optional[str] = None
+    
+    def __post_init__(self):
+        valid_types = ("text", "markdown", "image", "card")
+        if self.message_type not in valid_types:
+            self.message_type = "text"
 
 
 # 消息处理器类型别名
@@ -115,15 +140,30 @@ class Channel(ABC):
     @abstractmethod
     async def send_message(self, user_id: str, content: str, **kwargs) -> bool:
         """
-        发送消息给用户
+        发送私聊消息给用户
         
         Args:
             user_id: 用户ID
             content: 消息内容
             **kwargs: 扩展参数
-                - group_id: 群ID（发送群消息时）
                 - reply_to: 回复的消息ID
                 - images: 图片列表
+        
+        Returns:
+            是否发送成功
+        """
+        pass
+    
+    @abstractmethod
+    async def send_group_message(self, group_id: str, content: str, **kwargs) -> bool:
+        """
+        发送群消息
+        
+        Args:
+            group_id: 群ID
+            content: 消息内容
+            **kwargs: 扩展参数
+                - reply_to: 回复的消息ID
         
         Returns:
             是否发送成功
