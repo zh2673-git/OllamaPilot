@@ -60,6 +60,7 @@ class OllamaPilotAgent:
         checkpointer=None,
         tools: Optional[List[BaseTool]] = None,  # 兼容参数，实际使用内置工具
         embedding_model: Optional[str] = None,  # Embedding 模型名称
+        recursion_limit: int = 50,  # Agent 递归限制
         **kwargs,  # 忽略其他参数，保持向后兼容
     ):
         """
@@ -73,9 +74,11 @@ class OllamaPilotAgent:
             verbose: 是否显示详细执行过程
             checkpointer: 自定义 checkpointer
             embedding_model: Embedding 模型名称（传递给 GraphRAG Skill）
+            recursion_limit: Agent 递归限制，控制最大迭代次数
         """
         self.model = model
         self.verbose = verbose
+        self.recursion_limit = recursion_limit
 
         # 构建 Skill 配置
         skill_config = {}
@@ -193,7 +196,10 @@ class OllamaPilotAgent:
             print(f"🤖 用户: {query}")
 
         # 配置
-        config = {"configurable": {"thread_id": thread_id or "default"}}
+        config = {
+            "configurable": {"thread_id": thread_id or "default"},
+            "recursion_limit": self.recursion_limit,
+        }
 
         # 执行
         result = self.agent.invoke(
@@ -247,7 +253,10 @@ class OllamaPilotAgent:
         Yields:
             流式输出块
         """
-        config = {"configurable": {"thread_id": thread_id or "default"}}
+        config = {
+            "configurable": {"thread_id": thread_id or "default"},
+            "recursion_limit": self.recursion_limit,
+        }
 
         for chunk in self.agent.stream(
             {"messages": [HumanMessage(content=query)]},
@@ -271,7 +280,10 @@ class OllamaPilotAgent:
         Yields:
             事件字典，包含 event, name, data 等字段
         """
-        config = {"configurable": {"thread_id": thread_id or "default"}}
+        config = {
+            "configurable": {"thread_id": thread_id or "default"},
+            "recursion_limit": self.recursion_limit,
+        }
 
         async for event in self.agent.astream_events(
             {"messages": [HumanMessage(content=query)]},
@@ -293,7 +305,10 @@ class OllamaPilotAgent:
         if not self.checkpointer:
             return []
 
-        config = {"configurable": {"thread_id": thread_id or "default"}}
+        config = {
+            "configurable": {"thread_id": thread_id or "default"},
+            "recursion_limit": self.recursion_limit,
+        }
 
         try:
             checkpoint_tuple = self.checkpointer.get_tuple(config)
@@ -314,7 +329,10 @@ class OllamaPilotAgent:
         if not self.checkpointer:
             return
 
-        config = {"configurable": {"thread_id": thread_id or "default"}}
+        config = {
+            "configurable": {"thread_id": thread_id or "default"},
+            "recursion_limit": self.recursion_limit,
+        }
 
         try:
             self.checkpointer.delete(config)

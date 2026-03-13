@@ -151,6 +151,8 @@ class OllamaPilotChat:
             if embedding_model:
                 agent_kwargs["embedding_model"] = embedding_model
             
+            agent_kwargs["recursion_limit"] = self.config.recursion_limit
+            
             self.agent = create_agent(self.current_model, **agent_kwargs)
             print("✅ Agent 创建完成")
             
@@ -795,6 +797,24 @@ class OllamaPilotChat:
                             print(content, end="", flush=True)
                             full_response += content
                             has_content = True
+                
+                # 模型完成（当没有流式输出时，获取最终回复）
+                elif event_type == "on_chat_model_end":
+                    if not has_content:
+                        data = event.get("data", {})
+                        output = data.get("output", {})
+                        if output:
+                            if hasattr(output, "content"):
+                                content = output.content
+                            elif isinstance(output, dict):
+                                content = output.get("content", "")
+                            else:
+                                content = str(output)
+                            
+                            if content:
+                                print(content, end="", flush=True)
+                                full_response += content
+                                has_content = True
 
         try:
             # 运行异步流处理

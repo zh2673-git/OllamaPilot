@@ -176,6 +176,11 @@ class Config:
         """CLI 响应超时时间（秒），默认 120 秒"""
         return self.get_int('CLI_TIMEOUT', 120)
     
+    @property
+    def recursion_limit(self) -> int:
+        """Agent 递归限制，控制最大迭代次数，默认 50"""
+        return self.get_int('RECURSION_LIMIT', 50)
+    
     def reload(self):
         """重新加载配置"""
         self._config.clear()
@@ -198,6 +203,7 @@ class Config:
             'verbose': self.verbose,
             'default_thread_id': self.default_thread_id,
             'cli_timeout': self.cli_timeout,
+            'recursion_limit': self.recursion_limit,
         }
     
     def print_config(self):
