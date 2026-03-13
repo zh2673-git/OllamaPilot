@@ -64,6 +64,7 @@ channels:
     # 白名单（仅允许这些用户使用）
     # 注意：QQ Bot v2 使用 OpenID，不是 QQ 号！格式如: "EBF1C467FE7DAD4821DA7CA3A83ADAF9"
     # 首次启动后，给机器人发消息，日志会显示你的 OpenID
+    # 可选配置：留空 [] 表示允许所有用户使用
     whitelist:
       - "YOUR_OPEN_ID"
 
