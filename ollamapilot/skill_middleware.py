@@ -20,6 +20,7 @@ def get_time_aware_prompt() -> str:
     获取带当前时间的系统提示词
     
     注入当前时间信息，让模型始终知道"今天"、"明天"等相对时间概念。
+    使用简洁格式，避免模型重复输出时间信息。
     
     Returns:
         包含时间信息的系统提示词片段
@@ -33,28 +34,7 @@ def get_time_aware_prompt() -> str:
     day_after = (now + timedelta(days=2)).strftime("%Y-%m-%d")
     yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
     
-    # 计算本周一和周日
-    monday = (now - timedelta(days=now.weekday())).strftime("%Y-%m-%d")
-    sunday = (now + timedelta(days=6-now.weekday())).strftime("%Y-%m-%d")
-    
-    return f"""【当前时间信息】
-当前时间: {current_time} ({current_weekday})
-今天日期: {now.strftime("%Y-%m-%d")}
-明天日期: {tomorrow}
-后天日期: {day_after}
-昨天日期: {yesterday}
-本周一: {monday}
-本周日: {sunday}
-
-【时间理解指南】
-- 当用户提到"今天"时，指的是 {now.strftime("%Y-%m-%d")}
-- 当用户提到"明天"时，指的是 {tomorrow}
-- 当用户提到"后天"时，指的是 {day_after}
-- 当用户提到"昨天"时，指的是 {yesterday}
-- 当用户提到"下周"时，从 {monday} 开始计算
-- 你可以根据当前日期推算任意相对日期
-
-请基于以上准确时间信息回答用户问题。"""
+    return f"""当前系统时间: {current_time} ({current_weekday})。注意：当用户提到"今天"时指{now.strftime('%Y-%m-%d')}，"明天"指{tomorrow}，"后天"指{day_after}，"昨天"指{yesterday}。请基于这些准确时间信息理解用户问题，但不要在回答中重复列出这些日期对应关系，直接回答问题即可。"""
 
 
 class SkillMiddleware(AgentMiddleware):
