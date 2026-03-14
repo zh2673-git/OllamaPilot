@@ -529,7 +529,16 @@ agent = create_agent(model, middleware=[mcp_mw])
 
 ## 📋 版本历史
 
-### v0.3.2 (当前) - Skill 工具过滤、强制回复与交互优化
+### v0.3.3 (当前) - Markdown Skill 工具修复与稳定性提升
+
+**🎉 修复关键 Bug + 提升系统稳定性**
+
+- ✅ **Markdown Skill 工具修复**：修复 Markdown Skill（如 deep_research）工具被错误阻止的问题
+- ✅ **支持 get_required_tools()**：SkillSelectorMiddleware 正确获取 Markdown Skill 的工具名称
+- ✅ **强制回复机制增强**：为 agent.invoke() 添加强制回复，修复 QQ Bot 发送空消息问题
+- ✅ **工具过滤完善**：Python Skill 和 Markdown Skill 都能正确使用专属工具
+
+### v0.3.2 - Skill 工具过滤、强制回复与交互优化
 
 **🎉 智能工具管理 + 强制回复机制 + 交互体验全面升级**
 
