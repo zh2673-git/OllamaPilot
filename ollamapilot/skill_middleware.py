@@ -362,9 +362,14 @@ class SkillSelectorMiddleware(AgentMiddleware):
         # 更新允许的工具列表
         skill_tool_names = []
         if skill:
+            # 首先尝试获取工具实例（Python Skill）
             skill_tools = skill.get_tools()
             if skill_tools:
                 skill_tool_names = [t.name for t in skill_tools]
+            else:
+                # 对于 Markdown Skill，尝试获取工具名称列表
+                if hasattr(skill, 'get_required_tools'):
+                    skill_tool_names = skill.get_required_tools()
 
         # 设置允许的工具（内置工具 + Skill 专属工具）
         self.tool_filter.set_allowed_tools(skill_tool_names)
