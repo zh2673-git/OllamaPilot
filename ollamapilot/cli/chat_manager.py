@@ -565,6 +565,7 @@ class OllamaPilotChat:
 │  /switch <id>                  切换到指定会话                       │
 │  /clear                        清空当前对话历史                     │
 │  /info                         显示当前状态信息                     │
+│  /messages                     显示当前会话的消息列表               │
 │  /docs                         列出所有文档                         │
 │  /index [path]                 索引文档/文件夹(默认:knowledge_base) │
 │  /resume                       恢复失败的索引任务                   │
@@ -596,7 +597,7 @@ class OllamaPilotChat:
         """显示欢迎信息"""
         mode = "GraphRAG模式" if self.current_embedding_model else "标准模式"
         session = self.sessions.get(self.current_session_id)
-        
+
         print("\n" + "=" * 60)
         print(f"🤖 OllamaPilot 智能助手 ({mode})")
         print("=" * 60)
@@ -609,6 +610,53 @@ class OllamaPilotChat:
         print("输入 /index 手动索引文档")
         print("输入 'quit' 或 'exit' 退出")
         print("=" * 60 + "\n")
+
+    def show_messages(self):
+        """显示当前会话的消息列表"""
+        if not self.agent:
+            print("❌ Agent 未初始化")
+            return
+
+        history = self.agent.get_history(self.current_session_id)
+
+        print("\n" + "=" * 60)
+        print(f"📋 当前会话消息列表 (共 {len(history)} 条)")
+        print("=" * 60)
+
+        if not history:
+            print("(暂无消息)")
+            print("=" * 60 + "\n")
+            return
+
+        for i, msg in enumerate(history, 1):
+            msg_type = type(msg).__name__
+            content_preview = ""
+
+            if hasattr(msg, 'content') and msg.content:
+                content_str = str(msg.content)
+                # 限制内容长度
+                if len(content_str) > 100:
+                    content_preview = content_str[:100] + "..."
+                else:
+                    content_preview = content_str
+                # 替换换行符为空格，保持单行显示
+                content_preview = content_preview.replace('\n', ' ')
+
+            # 显示工具调用信息
+            tool_info = ""
+            if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                tool_names = [tc.get('name', 'unknown') for tc in msg.tool_calls]
+                tool_info = f" [工具: {', '.join(tool_names)}]"
+
+            # 显示工具名称
+            if hasattr(msg, 'name') and msg.name:
+                tool_info += f" [名称: {msg.name}]"
+
+            print(f"\n[{i}] {msg_type}{tool_info}")
+            if content_preview:
+                print(f"    {content_preview}")
+
+        print("\n" + "=" * 60 + "\n")
     
     def handle_command(self, command: str) -> bool:
         """处理斜杠命令"""
@@ -730,7 +778,10 @@ class OllamaPilotChat:
         
         elif cmd == '/reload':
             self.reload_config()
-        
+
+        elif cmd == '/messages':
+            self.show_messages()
+
         else:
             print(f"❌ 未知命令: {cmd}，输入 /help 查看帮助")
         

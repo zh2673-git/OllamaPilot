@@ -343,20 +343,12 @@ class SkillSelectorMiddleware(AgentMiddleware):
             return None
 
         last_message = messages[-1]
-        
-        # 调试：打印消息列表结构
-        if self.verbose:
-            msg_types = [type(m).__name__ for m in messages]
-            print(f"   [SkillSelector] 消息列表: {msg_types}")
-        
+
         # 只处理用户消息（HumanMessage），不处理工具返回或 AI 消息
         from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
         if not isinstance(last_message, HumanMessage):
-            if self.verbose:
-                msg_type = type(last_message).__name__
-                print(f"   [SkillSelector] 跳过非用户消息: {msg_type}")
             return None
-        
+
         query = ""
         if hasattr(last_message, "content"):
             query = str(last_message.content)
@@ -369,16 +361,13 @@ class SkillSelectorMiddleware(AgentMiddleware):
 
         # 构建时间感知的系统提示词
         time_prompt = get_time_aware_prompt()
-        
+
         # 更新允许的工具列表
         skill_tool_names = []
         if skill:
             skill_tools = skill.get_tools()
             if skill_tools:
                 skill_tool_names = [t.name for t in skill_tools]
-        
-        if self.verbose:
-            print(f"   [SkillSelector] 设置工具白名单: {skill_tool_names if skill_tool_names else '(仅内置工具)'}")
         
         self.tool_filter.set_allowed_tools(skill_tool_names)
         
@@ -408,8 +397,6 @@ class SkillSelectorMiddleware(AgentMiddleware):
             if not has_system:
                 # 没有系统消息，添加新的系统消息到开头
                 new_messages = [SystemMessage(content=full_prompt)] + messages
-                if self.verbose:
-                    print(f"   [SkillSelector] 添加系统消息，消息数: {len(messages)} -> {len(new_messages)}")
                 return {
                     "messages": new_messages,
                     "active_skill": skill.name
@@ -425,8 +412,6 @@ class SkillSelectorMiddleware(AgentMiddleware):
                         replaced = True
                     else:
                         new_messages.append(msg)
-                if self.verbose:
-                    print(f"   [SkillSelector] 替换系统消息，消息数: {len(messages)} -> {len(new_messages)}")
                 return {
                     "messages": new_messages,
                     "active_skill": skill.name
@@ -445,8 +430,6 @@ class SkillSelectorMiddleware(AgentMiddleware):
             if not has_system:
                 # 没有系统消息，添加新的系统消息到开头
                 new_messages = [SystemMessage(content=time_prompt)] + messages
-                if self.verbose:
-                    print(f"   [SkillSelector] 无Skill匹配，添加时间系统消息，消息数: {len(messages)} -> {len(new_messages)}")
                 return {
                     "messages": new_messages
                 }
@@ -461,8 +444,6 @@ class SkillSelectorMiddleware(AgentMiddleware):
                         replaced = True
                     else:
                         new_messages.append(msg)
-                if self.verbose:
-                    print(f"   [SkillSelector] 无Skill匹配，替换系统消息，消息数: {len(messages)} -> {len(new_messages)}")
                 return {
                     "messages": new_messages
                 }
