@@ -82,6 +82,10 @@ class SkillRegistry:
         Returns:
             Skill 实例或 None
         """
+        # 检查是否是默认 Skill
+        if name == "default" and self._default_skill:
+            return self._default_skill
+        
         # 检查是否是 Markdown Skill
         if name in self._markdown_skills:
             return self._markdown_skills[name]
@@ -101,7 +105,7 @@ class SkillRegistry:
             skill_instance.on_activate()
             self._skills[name] = skill_instance
             return skill_instance
-
+        
         return None
     
     def get_all_skills(self) -> List[Skill]:
