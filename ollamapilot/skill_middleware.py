@@ -345,8 +345,11 @@ class SkillSelectorMiddleware(AgentMiddleware):
         last_message = messages[-1]
         
         # 只处理用户消息（HumanMessage），不处理工具返回或 AI 消息
-        from langchain_core.messages import HumanMessage
+        from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
         if not isinstance(last_message, HumanMessage):
+            if self.verbose:
+                msg_type = type(last_message).__name__
+                print(f"   [SkillSelector] 跳过非用户消息: {msg_type}")
             return None
         
         query = ""
@@ -368,6 +371,10 @@ class SkillSelectorMiddleware(AgentMiddleware):
             skill_tools = skill.get_tools()
             if skill_tools:
                 skill_tool_names = [t.name for t in skill_tools]
+        
+        if self.verbose:
+            print(f"   [SkillSelector] 设置工具白名单: {skill_tool_names if skill_tool_names else '(仅内置工具)'}")
+        
         self.tool_filter.set_allowed_tools(skill_tool_names)
         
         if skill:

@@ -280,6 +280,8 @@ class OllamaPilotAgent:
         """
         config = {"configurable": {"thread_id": thread_id or "default"}}
 
+        # 只传入当前用户消息，历史消息由 checkpointer 自动管理
+        # LangChain Agent 会自动从 checkpointer 加载历史消息并合并
         async for event in self.agent.astream_events(
             {"messages": [HumanMessage(content=query)]},
             config,
