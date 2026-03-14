@@ -406,14 +406,23 @@ class SkillSelectorMiddleware(AgentMiddleware):
                     break
 
             if not has_system:
+                # 没有系统消息，添加新的系统消息
+                # 注意：保留所有原始消息，只在开头添加系统消息
+                new_messages = [SystemMessage(content=full_prompt)] + messages
+                if self.verbose:
+                    print(f"   [SkillSelector] 添加系统消息，消息数: {len(messages)} -> {len(new_messages)}")
                 return {
-                    "messages": [SystemMessage(content=full_prompt)] + messages,
+                    "messages": new_messages,
                     "active_skill": skill.name
                 }
             else:
-                # 已有系统消息，追加时间信息并更新 active_skill
+                # 已有系统消息，替换系统消息并保留其他所有消息
+                # 注意：messages[1:] 保留除第一条（旧系统消息）外的所有消息
+                new_messages = [SystemMessage(content=full_prompt)] + messages[1:]
+                if self.verbose:
+                    print(f"   [SkillSelector] 替换系统消息，消息数: {len(messages)} -> {len(new_messages)}")
                 return {
-                    "messages": [SystemMessage(content=full_prompt)] + messages[1:],
+                    "messages": new_messages,
                     "active_skill": skill.name
                 }
         else:
@@ -428,13 +437,19 @@ class SkillSelectorMiddleware(AgentMiddleware):
                     break
             
             if not has_system:
+                new_messages = [SystemMessage(content=time_prompt)] + messages
+                if self.verbose:
+                    print(f"   [SkillSelector] 无Skill匹配，添加时间系统消息，消息数: {len(messages)} -> {len(new_messages)}")
                 return {
-                    "messages": [SystemMessage(content=time_prompt)] + messages
+                    "messages": new_messages
                 }
             else:
                 # 替换现有的系统消息，保留时间信息
+                new_messages = [SystemMessage(content=time_prompt)] + messages[1:]
+                if self.verbose:
+                    print(f"   [SkillSelector] 无Skill匹配，替换系统消息，消息数: {len(messages)} -> {len(new_messages)}")
                 return {
-                    "messages": [SystemMessage(content=time_prompt)] + messages[1:]
+                    "messages": new_messages
                 }
 
     def _select_skill(self, query: str) -> Optional[Skill]:
