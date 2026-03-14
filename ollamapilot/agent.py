@@ -12,7 +12,7 @@ from langchain.agents.middleware import (
     ToolCallLimitMiddleware,
 )
 from langchain_core.tools import BaseTool
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -349,6 +349,51 @@ class OllamaPilotAgent:
             return skill.get_stats()
 
         return None
+
+    async def force_response_after_tool(self, thread_id: Optional[str] = None):
+        """
+        工具调用后强制模型生成回复
+
+        当模型在工具调用后没有生成回复时，使用此方法触发一次额外的模型调用，
+        要求模型基于工具结果生成回复。
+
+        注意：此方法会临时清空工具列表，确保只生成文本回复。
+
+        Args:
+            thread_id: 对话线程 ID
+
+        Yields:
+            模型生成的文本块
+        """
+        # 临时禁用工具调用，确保只生成文本回复
+        # 通过设置一个标志，让 before_model 知道这是强制回复
+        if self._selector:
+            # 保存原始工具列表
+            original_tools = self._selector.tool_filter.allowed_tools.copy()
+            # 清空工具列表，禁止工具调用
+            self._selector.tool_filter.set_allowed_tools([])
+            if self.verbose:
+                print("   [ForceResponse] 临时禁用工具调用")
+
+        try:
+            # 添加提示消息，要求模型基于工具结果生成回复
+            prompt = "基于上述工具执行结果，请为用户提供清晰、有用的回复。总结关键信息并给出实用建议。"
+
+            async for event in self.astream_events(prompt, thread_id=thread_id):
+                event_type = event.get("event", "")
+                if event_type == "on_chat_model_stream":
+                    data = event.get("data", {})
+                    chunk = data.get("chunk", None)
+                    if chunk and hasattr(chunk, "content"):
+                        content = chunk.content
+                        if content:
+                            yield content
+        finally:
+            # 恢复原始工具设置
+            if self._selector and original_tools:
+                self._selector.tool_filter.set_allowed_tools(list(original_tools))
+                if self.verbose:
+                    print("   [ForceResponse] 恢复工具调用")
 
 
 def create_ollama_agent(

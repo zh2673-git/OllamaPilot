@@ -808,8 +808,21 @@ class OllamaPilotChat:
             if has_content:
                 print("\n")
             elif tool_call_count > 0:
-                # 有工具调用但没有内容输出（可能是工具执行后没有生成回复）
-                print("\n（工具执行完成，但没有生成回复内容）\n")
+                # 有工具调用但没有内容输出，尝试强制生成回复
+                print("\n🔄 正在生成回复...", end="", flush=True)
+                try:
+                    forced_response = ""
+                    async for chunk in self.agent.force_response_after_tool(self.current_session_id):
+                        print(chunk, end="", flush=True)
+                        forced_response += chunk
+                    if forced_response:
+                        print("\n")
+                        full_response = forced_response
+                        has_content = True
+                    else:
+                        print("\n（工具执行完成，但无法生成回复内容）\n")
+                except Exception as e:
+                    print(f"\n（工具执行完成，但生成回复失败: {e}）\n")
             else:
                 print("（无回答）\n")
 
