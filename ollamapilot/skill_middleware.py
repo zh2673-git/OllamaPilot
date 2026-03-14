@@ -175,6 +175,12 @@ class SkillSelectorMiddleware(AgentMiddleware):
             return None
 
         last_message = messages[-1]
+        
+        # 只处理用户消息（HumanMessage），不处理工具返回或 AI 消息
+        from langchain_core.messages import HumanMessage
+        if not isinstance(last_message, HumanMessage):
+            return None
+        
         query = ""
         if hasattr(last_message, "content"):
             query = str(last_message.content)
