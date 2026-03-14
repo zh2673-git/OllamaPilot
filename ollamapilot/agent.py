@@ -142,19 +142,20 @@ class OllamaPilotAgent:
         中间件执行顺序（从前到后）:
         1. SkillSelectorMiddleware - Skill 选择
         2. Skill 自定义中间件（如 GraphRAGMiddleware）
-        3. ToolLoggingMiddleware - 工具调用日志
-        4. ToolRetryMiddleware - 工具重试
-        5. ToolCallLimitMiddleware - 工具调用限制
+        3. ToolFilterMiddleware - 工具过滤（根据 Skill 限制可用工具）
+        4. ToolLoggingMiddleware - 工具调用日志
+        5. ToolRetryMiddleware - 工具重试
+        6. ToolCallLimitMiddleware - 工具调用限制
         """
         middleware = []
 
         # 1. Skill 选择器（核心）
-        selector = SkillSelectorMiddleware(
+        self._selector = SkillSelectorMiddleware(
             self.skill_registry,
             default_skill_name="default",
             verbose=self.verbose
         )
-        middleware.append(selector)
+        middleware.append(self._selector)
 
         # 2. Skill 自定义中间件（动态收集）
         skill_middlewares = self.skill_registry.get_all_middlewares()
@@ -163,16 +164,22 @@ class OllamaPilotAgent:
             if self.verbose:
                 print(f"🔌 加载 Skill 中间件: {mw.name if hasattr(mw, 'name') else type(mw).__name__}")
 
-        # 3. 工具调用日志
+        # 3. 工具过滤中间件（根据选中 Skill 限制工具）
+        tool_filter = self._selector.get_tool_filter()
+        middleware.append(tool_filter)
+        if self.verbose:
+            print(f"🔒 启用工具过滤")
+
+        # 4. 工具调用日志
         if self.verbose:
             logging_mw = ToolLoggingMiddleware(verbose=True)
             middleware.append(logging_mw)
 
-        # 4. 工具重试
+        # 5. 工具重试
         retry_mw = ToolRetryMiddleware(max_retries=2)
         middleware.append(retry_mw)
 
-        # 5. 工具调用限制
+        # 6. 工具调用限制
         limit_mw = ToolCallLimitMiddleware(run_limit=max_tool_calls)
         middleware.append(limit_mw)
 

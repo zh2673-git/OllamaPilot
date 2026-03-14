@@ -1,6 +1,6 @@
 [project]
 name = "ollamapilot"
-version = "0.3.1"
+version = "0.3.2"
 description = "基于 LangChain 1.0+ 的 Ollama 智能助手 - 模块化、可扩展、小模型优化"
 readme = "README.md"
 license = "MIT"

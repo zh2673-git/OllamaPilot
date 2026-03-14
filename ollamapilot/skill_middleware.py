@@ -6,13 +6,28 @@ Skill Middleware 模块
 """
 
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Set
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.tools import BaseTool
 from langchain_core.messages import SystemMessage
 
 from ollamapilot.skills.base import Skill
 from ollamapilot.skills.loader import MarkdownSkill
+
+
+# 内置工具白名单 - 始终允许使用
+BUILTIN_TOOLS = {
+    "read_file",
+    "write_file",
+    "list_directory",
+    "search_files",
+    "shell_exec",
+    "shell_script",
+    "python_exec",
+    "web_search",
+    "web_fetch",
+    "web_search_setup",
+}
 
 
 def get_time_aware_prompt() -> str:
@@ -36,6 +51,117 @@ def get_time_aware_prompt() -> str:
     
     today = now.strftime('%Y-%m-%d')
     return f"""当前时间: {current_time} ({current_weekday})。今天是{today}，明天是{tomorrow}，后天是{day_after}，昨天是{yesterday}。"""
+
+
+class ToolFilterMiddleware(AgentMiddleware):
+    """
+    工具过滤中间件
+
+    根据当前激活的 Skill，限制只能调用特定的工具。
+    内置工具始终允许，Skill 专属工具按需允许。
+
+    示例:
+        >>> filter_mw = ToolFilterMiddleware(verbose=True)
+        >>> filter_mw.set_allowed_tools(["execute_deep_research"])
+        >>> agent = create_agent(model, tools, middleware=[..., filter_mw])
+    """
+
+    def __init__(self, verbose: bool = False):
+        """
+        初始化工具过滤中间件
+
+        Args:
+            verbose: 是否显示详细日志
+        """
+        super().__init__()
+        self.verbose = verbose
+        self.allowed_tools: Set[str] = set()
+        self._update_allowed_tools([])  # 初始只允许内置工具
+
+    def _update_allowed_tools(self, skill_tools: List[str]):
+        """
+        更新允许的工具列表
+
+        Args:
+            skill_tools: Skill 专属工具名称列表
+        """
+        # 内置工具 + Skill 专属工具
+        self.allowed_tools = BUILTIN_TOOLS | set(skill_tools)
+
+        if self.verbose:
+            print(f"🔧 允许工具 ({len(self.allowed_tools)} 个): {sorted(self.allowed_tools)}")
+
+    def set_allowed_tools(self, skill_tools: List[str]):
+        """设置允许的工具列表（供外部调用）"""
+        self._update_allowed_tools(skill_tools)
+
+    @property
+    def name(self) -> str:
+        return "ToolFilterMiddleware"
+
+    def wrap_tool_call(self, request: Any, handler: Any) -> Any:
+        """
+        包装工具调用，进行过滤（同步版本）
+
+        Args:
+            request: 工具调用请求
+            handler: 处理函数
+
+        Returns:
+            工具调用结果或错误信息
+        """
+        return self._filter_and_call(request, handler)
+
+    async def awrap_tool_call(self, request: Any, handler: Any) -> Any:
+        """
+        包装工具调用，进行过滤（异步版本）
+
+        Args:
+            request: 工具调用请求
+            handler: 异步处理函数
+
+        Returns:
+            工具调用结果或错误信息
+        """
+        return self._filter_and_call(request, handler)
+
+    def _filter_and_call(self, request: Any, handler: Any) -> Any:
+        """
+        工具调用过滤逻辑
+
+        Args:
+            request: 工具调用请求
+            handler: 处理函数
+
+        Returns:
+            工具调用结果或错误信息
+        """
+        # 获取工具名称
+        tool_call = getattr(request, "tool_call", {})
+        if isinstance(tool_call, dict):
+            tool_name = tool_call.get("name", "unknown")
+        else:
+            tool_name = getattr(tool_call, "name", "unknown")
+
+        # 检查工具是否允许使用
+        if tool_name not in self.allowed_tools:
+            available = ", ".join(sorted(self.allowed_tools))
+            error_msg = (
+                f"❌ 工具 '{tool_name}' 在当前 Skill 下不可用。\n\n"
+                f"可用工具: {available}\n\n"
+                f"提示: 如需使用此工具，请尝试用相关关键词触发对应的 Skill。"
+            )
+
+            if self.verbose:
+                print(f"🚫 阻止调用: {tool_name}")
+
+            return error_msg
+
+        # 允许调用
+        if self.verbose:
+            print(f"✅ 允许调用: {tool_name}")
+
+        return handler(request)
 
 
 class SkillMiddleware(AgentMiddleware):
@@ -153,6 +279,9 @@ class SkillSelectorMiddleware(AgentMiddleware):
         self.default_skill_name = default_skill_name
         self.verbose = verbose
         self._active_skill: Optional[str] = None
+        
+        # 创建工具过滤器
+        self.tool_filter = ToolFilterMiddleware(verbose=verbose)
 
     @property
     def name(self) -> str:
@@ -193,6 +322,14 @@ class SkillSelectorMiddleware(AgentMiddleware):
 
         # 构建时间感知的系统提示词
         time_prompt = get_time_aware_prompt()
+        
+        # 更新允许的工具列表
+        skill_tool_names = []
+        if skill:
+            skill_tools = skill.get_tools()
+            if skill_tools:
+                skill_tool_names = [t.name for t in skill_tools]
+        self.tool_filter.set_allowed_tools(skill_tool_names)
         
         if skill:
             # 打印 Skill 激活日志
@@ -270,6 +407,17 @@ class SkillSelectorMiddleware(AgentMiddleware):
             return self.registry.get_skill(self.default_skill_name)
 
         return None
+
+    def get_tool_filter(self) -> ToolFilterMiddleware:
+        """
+        获取工具过滤器实例
+
+        供 Agent 添加到中间件链中使用。
+
+        Returns:
+            ToolFilterMiddleware 实例
+        """
+        return self.tool_filter
 
 
 class ToolLoggingMiddleware(AgentMiddleware):
