@@ -214,15 +214,60 @@ class OllamaPilotAgent:
 
         # 提取回复
         messages = result.get("messages", [])
+        response = ""
+        has_tool_calls = False
+
         if messages:
+            # 检查消息历史中是否有工具调用
+            for msg in messages:
+                if hasattr(msg, "tool_calls") and msg.tool_calls:
+                    has_tool_calls = True
+                    break
+
+            # 获取最后一条消息的内容
             last_message = messages[-1]
             if hasattr(last_message, "content"):
-                response = last_message.content
-                if self.verbose:
-                    print(f"🤖 AI: {response[:200]}{'...' if len(response) > 200 else ''}")
-                return response
+                response = last_message.content or ""
 
-        return ""
+        # 如果有工具调用但回复为空，强制生成回复
+        if has_tool_calls and not response.strip():
+            if self.verbose:
+                print("🔄 检测到工具调用后无回复，强制生成回复...")
+            response = self._force_response(messages, config)
+
+        if self.verbose and response:
+            print(f"🤖 AI: {response[:200]}{'...' if len(response) > 200 else ''}")
+
+        return response
+
+    def _force_response(self, messages: List[Any], config: Dict[str, Any]) -> str:
+        """
+        强制生成回复（当模型调用工具后没有生成回复时）
+
+        Args:
+            messages: 当前消息历史
+            config: 配置
+
+        Returns:
+            强制生成的回复
+        """
+        try:
+            # 添加系统提示，要求模型基于工具结果生成回复
+            force_messages = messages + [
+                HumanMessage(content="请基于上述工具执行结果，生成一个完整的回复。不要调用任何工具，直接回答用户的问题。")
+            ]
+
+            # 临时禁用工具调用，强制模型只生成文本回复
+            result = self.model.invoke(force_messages)
+
+            if hasattr(result, "content"):
+                return result.content or "（工具执行完成，但无法生成详细回复）"
+
+        except Exception as e:
+            if self.verbose:
+                print(f"⚠️ 强制生成回复失败: {e}")
+
+        return "（工具执行完成，但生成回复失败）"
 
     def _select_skill_for_query(self, query: str) -> Optional[Any]:
         """
