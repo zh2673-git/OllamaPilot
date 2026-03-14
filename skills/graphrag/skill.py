@@ -172,7 +172,7 @@ class GraphRAGSkill(Skill):
                     verbose=True
                 )
 
-            print(f"🧠 GraphRAG Skill 已加载 (Embedding: {self.embedding_model or '默认'})")
+            print(f"🧠 GraphRAG: Embedding模型={self.embedding_model or '默认'}")
 
         except Exception as e:
             print(f"⚠️ GraphRAG Skill 初始化失败: {e}")

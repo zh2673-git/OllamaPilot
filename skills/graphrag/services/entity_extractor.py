@@ -118,7 +118,8 @@ class HybridEntityExtractor:
             print("⚠️ 未找到全局词典，使用默认词典")
             return self._get_default_dictionary()
 
-        print(f"📚 已加载 {len(merged)} 类实体，共 {sum(len(v) for v in merged.values())} 个词条")
+        entity_count = sum(len(v) for v in merged.values())
+        print(f"📚 实体词典: {len(merged)} 类共 {entity_count} 个词条")
         return merged
 
     def _get_default_dictionary(self) -> Dict[str, List[str]]:

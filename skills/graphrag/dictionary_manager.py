@@ -53,6 +53,7 @@ class DictionaryManager:
         if not self.config_dir.exists():
             return
 
+        loaded_count = 0
         for dict_file in self.config_dir.glob("*.json"):
             try:
                 with open(dict_file, 'r', encoding='utf-8') as f:
@@ -68,10 +69,13 @@ class DictionaryManager:
                 )
 
                 self._global_dictionaries[dict_file.stem] = config
-                print(f"📚 加载全局词典: {config.name} ({config.domain})")
+                loaded_count += 1
 
             except Exception as e:
                 print(f"⚠️ 加载词典失败 {dict_file}: {e}")
+
+        if loaded_count > 0:
+            print(f"📚 已加载 {loaded_count} 个领域词典")
 
     def get_global_dictionary(self, name: str) -> Optional[DictionaryConfig]:
         """

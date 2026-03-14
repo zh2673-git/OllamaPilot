@@ -369,12 +369,15 @@ class SkillSelectorMiddleware(AgentMiddleware):
         self.tool_filter.set_allowed_tools(skill_tool_names)
         
         if skill:
-            # 打印 Skill 激活日志
-            if self.verbose:
-                print(f"🎯 激活 Skill: {skill.name}")
-
             # 记录当前激活的 Skill
             self._active_skill = skill.name
+
+            # 计算可用工具数量
+            total_tools = len(BUILTIN_TOOLS) + len(skill_tool_names)
+
+            # 打印 Skill 激活日志（包含工具数量）
+            if self.verbose:
+                print(f"🎯 激活 Skill: {skill.name} ({total_tools}个工具可用)")
 
             skill_prompt = skill.get_system_prompt()
             

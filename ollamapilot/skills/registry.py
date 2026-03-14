@@ -60,7 +60,6 @@ class SkillRegistry:
         # 保存类和实例
         self._skill_classes[name] = skill_class
         self._skills[name] = skill_instance
-        print(f"✅ 注册 Skill: {name}")
     
     def register_markdown_skill(self, skill: Skill) -> None:
         """
@@ -70,7 +69,6 @@ class SkillRegistry:
             skill: MarkdownSkill 实例
         """
         self._markdown_skills[skill.name] = skill
-        print(f"✅ 注册 Markdown Skill: {skill.name}")
     
     def get_skill(self, name: str) -> Optional[Skill]:
         """

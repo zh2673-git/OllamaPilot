@@ -84,10 +84,11 @@ class OllamaPilotAgent:
 
         # 初始化 Skill 注册中心
         self.skill_registry = SkillRegistry(skill_config=skill_config)
+
+        # 加载 Skill
+        skill_count = 0
         if skills_dir:
-            count = self.skill_registry.discover_skills(skills_dir)
-            if self.verbose:
-                print(f"📦 已加载 {count} 个 Skill")
+            skill_count = self.skill_registry.discover_skills(skills_dir)
 
         # 收集所有工具（内置 + Skill）
         self.all_tools = self._get_all_tools()
@@ -102,6 +103,10 @@ class OllamaPilotAgent:
 
         # 构建中间件列表
         middleware = self._build_middleware(max_tool_calls)
+
+        # 打印启动摘要
+        if self.verbose:
+            print(f"📦 已加载 {skill_count} 个 Skill | 🔧 {len(self.all_tools)} 个工具 | 🔒 工具过滤已启用")
 
         # 创建 Agent（使用 LangChain 原生 create_agent）
         self.agent = lc_create_agent(
@@ -129,9 +134,6 @@ class OllamaPilotAgent:
         # 收集所有 Skill 提供的工具
         skill_tools = self.skill_registry.get_all_tools()
         tools.extend(skill_tools)
-
-        if self.verbose and skill_tools:
-            print(f"🔧 加载 {len(skill_tools)} 个 Skill 工具")
 
         return tools
 
@@ -161,14 +163,10 @@ class OllamaPilotAgent:
         skill_middlewares = self.skill_registry.get_all_middlewares()
         for mw in skill_middlewares:
             middleware.append(mw)
-            if self.verbose:
-                print(f"🔌 加载 Skill 中间件: {mw.name if hasattr(mw, 'name') else type(mw).__name__}")
 
         # 3. 工具过滤中间件（根据选中 Skill 限制工具）
         tool_filter = self._selector.get_tool_filter()
         middleware.append(tool_filter)
-        if self.verbose:
-            print(f"🔒 启用工具过滤")
 
         # 4. 工具调用日志
         if self.verbose:
