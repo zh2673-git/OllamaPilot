@@ -5,6 +5,7 @@ Skill Middleware 模块
 保持 SKILL.md 配置方式，内部使用原生 Middleware 机制。
 """
 
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Sequence
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.tools import BaseTool
@@ -12,6 +13,48 @@ from langchain_core.messages import SystemMessage
 
 from ollamapilot.skills.base import Skill
 from ollamapilot.skills.loader import MarkdownSkill
+
+
+def get_time_aware_prompt() -> str:
+    """
+    获取带当前时间的系统提示词
+    
+    注入当前时间信息，让模型始终知道"今天"、"明天"等相对时间概念。
+    
+    Returns:
+        包含时间信息的系统提示词片段
+    """
+    now = datetime.now()
+    current_time = now.strftime("%Y-%m-%d %H:%M:%S")
+    current_weekday = now.strftime("%A")
+    
+    # 计算相对日期
+    tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+    day_after = (now + timedelta(days=2)).strftime("%Y-%m-%d")
+    yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    # 计算本周一和周日
+    monday = (now - timedelta(days=now.weekday())).strftime("%Y-%m-%d")
+    sunday = (now + timedelta(days=6-now.weekday())).strftime("%Y-%m-%d")
+    
+    return f"""【当前时间信息】
+当前时间: {current_time} ({current_weekday})
+今天日期: {now.strftime("%Y-%m-%d")}
+明天日期: {tomorrow}
+后天日期: {day_after}
+昨天日期: {yesterday}
+本周一: {monday}
+本周日: {sunday}
+
+【时间理解指南】
+- 当用户提到"今天"时，指的是 {now.strftime("%Y-%m-%d")}
+- 当用户提到"明天"时，指的是 {tomorrow}
+- 当用户提到"后天"时，指的是 {day_after}
+- 当用户提到"昨天"时，指的是 {yesterday}
+- 当用户提到"下周"时，从 {monday} 开始计算
+- 你可以根据当前日期推算任意相对日期
+
+请基于以上准确时间信息回答用户问题。"""
 
 
 class SkillMiddleware(AgentMiddleware):
@@ -136,7 +179,7 @@ class SkillSelectorMiddleware(AgentMiddleware):
 
     def before_model(self, state: Any, runtime: Any) -> Optional[Dict[str, Any]]:
         """
-        选择合适的 Skill 并注入系统提示词
+        选择合适的 Skill 并注入系统提示词（包含时间信息）
 
         Args:
             state: 当前 Agent 状态
@@ -161,6 +204,9 @@ class SkillSelectorMiddleware(AgentMiddleware):
         # 查找匹配的 Skill
         skill = self._select_skill(query)
 
+        # 构建时间感知的系统提示词
+        time_prompt = get_time_aware_prompt()
+        
         if skill:
             # 打印 Skill 激活日志
             if self.verbose:
@@ -169,27 +215,52 @@ class SkillSelectorMiddleware(AgentMiddleware):
             # 记录当前激活的 Skill
             self._active_skill = skill.name
 
-            system_prompt = skill.get_system_prompt()
-            if system_prompt:
-                # 检查是否已存在系统消息
-                has_system = False
-                for msg in messages:
-                    if isinstance(msg, SystemMessage):
-                        has_system = True
-                        break
+            skill_prompt = skill.get_system_prompt()
+            
+            # 组合时间提示词和 Skill 提示词
+            if skill_prompt:
+                full_prompt = f"{time_prompt}\n\n【Skill 上下文】\n{skill_prompt}"
+            else:
+                full_prompt = time_prompt
+            
+            # 检查是否已存在系统消息
+            has_system = False
+            for msg in messages:
+                if isinstance(msg, SystemMessage):
+                    has_system = True
+                    break
 
-                if not has_system:
-                    return {
-                        "messages": [SystemMessage(content=system_prompt)] + messages,
-                        "active_skill": skill.name
-                    }
-                else:
-                    # 已有系统消息，只更新 active_skill
-                    return {"active_skill": skill.name}
+            if not has_system:
+                return {
+                    "messages": [SystemMessage(content=full_prompt)] + messages,
+                    "active_skill": skill.name
+                }
+            else:
+                # 已有系统消息，追加时间信息并更新 active_skill
+                return {
+                    "messages": [SystemMessage(content=full_prompt)] + messages[1:],
+                    "active_skill": skill.name
+                }
         else:
+            # 没有匹配 Skill，只注入时间信息
             self._active_skill = None
-
-        return None
+            
+            # 检查是否已存在系统消息
+            has_system = False
+            for msg in messages:
+                if isinstance(msg, SystemMessage):
+                    has_system = True
+                    break
+            
+            if not has_system:
+                return {
+                    "messages": [SystemMessage(content=time_prompt)] + messages
+                }
+            else:
+                # 替换现有的系统消息，保留时间信息
+                return {
+                    "messages": [SystemMessage(content=time_prompt)] + messages[1:]
+                }
 
     def _select_skill(self, query: str) -> Optional[Skill]:
         """
