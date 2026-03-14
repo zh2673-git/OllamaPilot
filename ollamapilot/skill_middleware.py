@@ -365,15 +365,17 @@ class SkillSelectorMiddleware(AgentMiddleware):
             skill_tools = skill.get_tools()
             if skill_tools:
                 skill_tool_names = [t.name for t in skill_tools]
-        
+
+        # 设置允许的工具（内置工具 + Skill 专属工具）
         self.tool_filter.set_allowed_tools(skill_tool_names)
-        
+
         if skill:
             # 记录当前激活的 Skill
             self._active_skill = skill.name
 
-            # 计算可用工具数量
-            total_tools = len(BUILTIN_TOOLS) + len(skill_tool_names)
+            # 计算实际可用的工具数量（去重后的）
+            all_allowed_tools = BUILTIN_TOOLS | set(skill_tool_names)
+            total_tools = len(all_allowed_tools)
 
             # 打印 Skill 激活日志（包含工具数量）
             if self.verbose:
