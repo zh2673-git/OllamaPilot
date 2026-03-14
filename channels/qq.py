@@ -17,7 +17,7 @@ import aiohttp
 
 from .base import Channel, ChannelMessage, ChannelResponse
 from .registry import register_channel
-from .renderers import get_renderer, QQMarkdownRenderer
+from .renderers import get_renderer, QQPlainTextRenderer
 
 
 @register_channel
@@ -69,8 +69,8 @@ class QQChannel(Channel):
         self.sandbox = config.get("sandbox", False)
         self.at_only_in_group = config.get("at_only_in_group", True)
         
-        # 初始化 Markdown 渲染器
-        self.renderer = QQMarkdownRenderer()
+        # 初始化 Markdown 渲染器（使用 QQ 纯文本优化版）
+        self.renderer = QQPlainTextRenderer()
         
         # QQ Bot v2 Intents (位运算)
         # 1<<25: C2C_MESSAGE_CREATE (单聊消息)
@@ -273,25 +273,15 @@ class QQChannel(Channel):
         url = f"{self._api_base}/v2/users/{user_id}/messages"
         headers = self._get_headers()
 
-        # 使用 Markdown 渲染器转换内容
+        # 使用 Markdown 渲染器转换内容（优化为 QQ 友好的纯文本格式）
         rendered = self.renderer.render(content)
+        message_content = rendered.content if rendered.content else content
 
         # 构建消息数据
-        if rendered.message_type == "rich_text" and rendered.content:
-            # 富文本消息
-            data = {
-                "content": "",  # 富文本需要 content 为空或摘要
-                "msg_type": 0,
-                "markdown": {
-                    "content": rendered.content
-                }
-            }
-        else:
-            # 普通文本消息
-            data = {
-                "content": content,
-                "msg_type": 0,  # 文本消息
-            }
+        data = {
+            "content": message_content,
+            "msg_type": 0,  # 文本消息
+        }
 
         if msg_id:
             data["msg_id"] = msg_id  # 被动消息需要回复的消息ID
@@ -300,36 +290,6 @@ class QQChannel(Channel):
             async with self.session.post(url, json=data, headers=headers) as resp:
                 if resp.status == 200:
                     print(f"✅ 单聊消息已发送给 {user_id}")
-                    return True
-                else:
-                    text = await resp.text()
-                    # 如果富文本发送失败，尝试发送纯文本
-                    if "markdown" in data:
-                        print(f"⚠️ 富文本发送失败，尝试纯文本: {resp.status}")
-                        return await self._send_c2c_message_plain(user_id, content, msg_id)
-                    print(f"⚠️ 发送单聊消息失败: {resp.status} - {text}")
-                    return False
-        except Exception as e:
-            print(f"⚠️ 发送单聊消息异常: {e}")
-            return False
-
-    async def _send_c2c_message_plain(self, user_id: str, content: str, msg_id: str = None) -> bool:
-        """发送纯文本单聊消息（降级方案）"""
-        await self._refresh_access_token()
-
-        url = f"{self._api_base}/v2/users/{user_id}/messages"
-        headers = self._get_headers()
-        data = {
-            "content": content,
-            "msg_type": 0,
-        }
-        if msg_id:
-            data["msg_id"] = msg_id
-
-        try:
-            async with self.session.post(url, json=data, headers=headers) as resp:
-                if resp.status == 200:
-                    print(f"✅ 单聊消息已发送给 {user_id} (纯文本)")
                     return True
                 else:
                     text = await resp.text()
@@ -347,25 +307,15 @@ class QQChannel(Channel):
         url = f"{self._api_base}/v2/groups/{group_id}/messages"
         headers = self._get_headers()
 
-        # 使用 Markdown 渲染器转换内容
+        # 使用 Markdown 渲染器转换内容（优化为 QQ 友好的纯文本格式）
         rendered = self.renderer.render(content)
+        message_content = rendered.content if rendered.content else content
 
         # 构建消息数据
-        if rendered.message_type == "rich_text" and rendered.content:
-            # 富文本消息
-            data = {
-                "content": "",
-                "msg_type": 0,
-                "markdown": {
-                    "content": rendered.content
-                }
-            }
-        else:
-            # 普通文本消息
-            data = {
-                "content": content,
-                "msg_type": 0,
-            }
+        data = {
+            "content": message_content,
+            "msg_type": 0,
+        }
 
         if msg_id:
             data["msg_id"] = msg_id
@@ -374,36 +324,6 @@ class QQChannel(Channel):
             async with self.session.post(url, json=data, headers=headers) as resp:
                 if resp.status == 200:
                     print(f"✅ 群消息已发送到 {group_id}")
-                    return True
-                else:
-                    text = await resp.text()
-                    # 如果富文本发送失败，尝试发送纯文本
-                    if "markdown" in data:
-                        print(f"⚠️ 富文本发送失败，尝试纯文本: {resp.status}")
-                        return await self._send_group_message_plain(group_id, content, msg_id)
-                    print(f"⚠️ 发送群消息失败: {resp.status} - {text}")
-                    return False
-        except Exception as e:
-            print(f"⚠️ 发送群消息异常: {e}")
-            return False
-
-    async def _send_group_message_plain(self, group_id: str, content: str, msg_id: str = None) -> bool:
-        """发送纯文本群消息（降级方案）"""
-        await self._refresh_access_token()
-
-        url = f"{self._api_base}/v2/groups/{group_id}/messages"
-        headers = self._get_headers()
-        data = {
-            "content": content,
-            "msg_type": 0,
-        }
-        if msg_id:
-            data["msg_id"] = msg_id
-
-        try:
-            async with self.session.post(url, json=data, headers=headers) as resp:
-                if resp.status == 200:
-                    print(f"✅ 群消息已发送到 {group_id} (纯文本)")
                     return True
                 else:
                     text = await resp.text()

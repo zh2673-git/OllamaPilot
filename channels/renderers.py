@@ -376,6 +376,69 @@ class PlainTextRenderer(MarkdownRenderer):
         return RenderedMessage(text.strip(), "text")
 
 
+class QQPlainTextRenderer(MarkdownRenderer):
+    """
+    QQ 纯文本优化渲染器
+
+    将 Markdown 转换为适合 QQ 显示的纯文本格式。
+    保留一些视觉格式（如标题加粗符号、代码块标记等），提升可读性。
+    """
+
+    def render(self, markdown_text: str) -> RenderedMessage:
+        """将 Markdown 转换为 QQ 优化的纯文本"""
+        if not markdown_text:
+            return RenderedMessage("", "text")
+
+        text = markdown_text
+
+        # 处理标题 - 保留并加粗
+        text = re.sub(r'^# (.+)$', r'【\1】', text, flags=re.MULTILINE)
+        text = re.sub(r'^## (.+)$', r'【\1】', text, flags=re.MULTILINE)
+        text = re.sub(r'^###+ (.+)$', r'【\1】', text, flags=re.MULTILINE)
+
+        # 处理粗体 - 保留内容，用【】包裹表示强调
+        text = re.sub(r'\*\*(.+?)\*\*', r'【\1】', text)
+        text = re.sub(r'__(.+?)__', r'【\1】', text)
+
+        # 处理斜体 - 保留内容
+        text = re.sub(r'\*(.+?)\*', r'\1', text)
+        text = re.sub(r'_(.+?)_', r'\1', text)
+
+        # 处理删除线 - 保留内容，加删除标记
+        text = re.sub(r'~~(.+?)~~', r'[删除:\1]', text)
+
+        # 处理代码块 - 保留格式
+        def format_code_block(match):
+            language = match.group(1) or '代码'
+            code = match.group(2).strip()
+            return f"\n━━━━━━【{language}】━━━━━━\n{code}\n━━━━━━━━━━━━━━━━\n"
+
+        text = re.sub(r'```(\w+)?\n(.*?)```', format_code_block, text, flags=re.DOTALL)
+
+        # 处理行内代码 - 用【】包裹
+        text = re.sub(r'`([^`]+)`', r'【\1】', text)
+
+        # 处理链接 - 显示为 文本(链接)
+        text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'\1(\2)', text)
+
+        # 处理无序列表 - 使用 • 符号
+        text = re.sub(r'^\s*[-*+] (.+)$', r'• \1', text, flags=re.MULTILINE)
+
+        # 处理有序列表 - 保留数字
+        text = re.sub(r'^\s*(\d+)\. (.+)$', r'\1. \2', text, flags=re.MULTILINE)
+
+        # 处理引用 - 保留 > 符号
+        text = re.sub(r'^> (.+)$', r'> \1', text, flags=re.MULTILINE)
+
+        # 处理分隔线
+        text = re.sub(r'^\s*[-*_]{3,}\s*$', '\n━━━━━━━━━━━━\n', text, flags=re.MULTILINE)
+
+        # 清理多余空行
+        text = re.sub(r'\n{3,}', '\n\n', text)
+
+        return RenderedMessage(text.strip(), "text")
+
+
 def get_renderer(platform: str) -> MarkdownRenderer:
     """
     获取指定平台的渲染器
@@ -387,7 +450,7 @@ def get_renderer(platform: str) -> MarkdownRenderer:
         MarkdownRenderer: 对应平台的渲染器
     """
     renderers = {
-        "qq": QQMarkdownRenderer(),
+        "qq": QQPlainTextRenderer(),  # QQ 使用纯文本优化版
         "feishu": PlainTextRenderer(),  # 飞书可以后续实现卡片消息
         "dingtalk": PlainTextRenderer(),  # 钉钉可以后续实现 Markdown 消息
         "plain": PlainTextRenderer(),
