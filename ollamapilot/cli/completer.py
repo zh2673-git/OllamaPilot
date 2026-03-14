@@ -16,8 +16,8 @@ class CommandCompleter:
     # 所有可用命令
     COMMANDS = [
         '/help', '/model', '/embedding', '/new', '/sessions',
-        '/switch', '/clear', '/info', '/docs', '/index', '/reload',
-        '/resume', 'quit', 'exit', 'q', 'bye'
+        '/switch', '/clear', '/info', '/messages', '/docs', '/index',
+        '/reload', '/resume', 'quit', 'exit', 'q', 'bye'
     ]
     
     def __init__(self):

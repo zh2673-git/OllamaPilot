@@ -307,9 +307,27 @@ class OllamaPilotAgent:
         try:
             checkpoint_tuple = self.checkpointer.get_tuple(config)
             if checkpoint_tuple and checkpoint_tuple.checkpoint:
-                return checkpoint_tuple.checkpoint.get("messages", [])
-        except Exception:
-            pass
+                # 尝试不同的消息存储位置
+                checkpoint = checkpoint_tuple.checkpoint
+
+                # 方法1: 直接获取 messages
+                if "messages" in checkpoint:
+                    return checkpoint["messages"]
+
+                # 方法2: 从 channel_values 获取 (LangGraph 新格式)
+                if "channel_values" in checkpoint:
+                    channel_values = checkpoint["channel_values"]
+                    if "messages" in channel_values:
+                        return channel_values["messages"]
+
+                # 方法3: 从完整状态获取
+                if checkpoint_tuple.state:
+                    state = checkpoint_tuple.state
+                    if "messages" in state:
+                        return state["messages"]
+        except Exception as e:
+            if self.verbose:
+                print(f"   [GetHistory] 获取历史失败: {e}")
 
         return []
 

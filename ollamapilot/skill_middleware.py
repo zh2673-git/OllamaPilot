@@ -88,9 +88,6 @@ class ToolFilterMiddleware(AgentMiddleware):
         # 内置工具 + Skill 专属工具
         self.allowed_tools = BUILTIN_TOOLS | set(skill_tools)
 
-        if self.verbose:
-            print(f"🔧 允许工具 ({len(self.allowed_tools)} 个): {sorted(self.allowed_tools)}")
-
     def set_allowed_tools(self, skill_tools: List[str]):
         """设置允许的工具列表（供外部调用）"""
         self._update_allowed_tools(skill_tools)
