@@ -123,11 +123,11 @@ class ToolFilterMiddleware(AgentMiddleware):
         Returns:
             工具调用结果或错误信息
         """
-        return self._filter_and_call(request, handler)
+        return await self._filter_and_call_async(request, handler)
 
     def _filter_and_call(self, request: Any, handler: Any) -> Any:
         """
-        工具调用过滤逻辑
+        工具调用过滤逻辑（同步版本）
 
         Args:
             request: 工具调用请求
@@ -162,6 +162,45 @@ class ToolFilterMiddleware(AgentMiddleware):
             print(f"✅ 允许调用: {tool_name}")
 
         return handler(request)
+
+    async def _filter_and_call_async(self, request: Any, handler: Any) -> Any:
+        """
+        工具调用过滤逻辑（异步版本）
+
+        Args:
+            request: 工具调用请求
+            handler: 异步处理函数
+
+        Returns:
+            工具调用结果或错误信息
+        """
+        # 获取工具名称
+        tool_call = getattr(request, "tool_call", {})
+        if isinstance(tool_call, dict):
+            tool_name = tool_call.get("name", "unknown")
+        else:
+            tool_name = getattr(tool_call, "name", "unknown")
+
+        # 检查工具是否允许使用
+        if tool_name not in self.allowed_tools:
+            available = ", ".join(sorted(self.allowed_tools))
+            error_msg = (
+                f"❌ 工具 '{tool_name}' 在当前 Skill 下不可用。\n\n"
+                f"可用工具: {available}\n\n"
+                f"提示: 如需使用此工具，请尝试用相关关键词触发对应的 Skill。"
+            )
+
+            if self.verbose:
+                print(f"🚫 阻止调用: {tool_name}")
+
+            return error_msg
+
+        # 允许调用
+        if self.verbose:
+            print(f"✅ 允许调用: {tool_name}")
+
+        # 异步调用 handler
+        return await handler(request)
 
 
 class SkillMiddleware(AgentMiddleware):
