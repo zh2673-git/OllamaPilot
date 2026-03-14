@@ -344,6 +344,11 @@ class SkillSelectorMiddleware(AgentMiddleware):
 
         last_message = messages[-1]
         
+        # 调试：打印消息列表结构
+        if self.verbose:
+            msg_types = [type(m).__name__ for m in messages]
+            print(f"   [SkillSelector] 消息列表: {msg_types}")
+        
         # 只处理用户消息（HumanMessage），不处理工具返回或 AI 消息
         from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
         if not isinstance(last_message, HumanMessage):
