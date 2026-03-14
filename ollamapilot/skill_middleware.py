@@ -34,7 +34,8 @@ def get_time_aware_prompt() -> str:
     day_after = (now + timedelta(days=2)).strftime("%Y-%m-%d")
     yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
     
-    return f"""当前系统时间: {current_time} ({current_weekday})。注意：当用户提到"今天"时指{now.strftime('%Y-%m-%d')}，"明天"指{tomorrow}，"后天"指{day_after}，"昨天"指{yesterday}。请基于这些准确时间信息理解用户问题，但不要在回答中重复列出这些日期对应关系，直接回答问题即可。"""
+    today = now.strftime('%Y-%m-%d')
+    return f"""当前时间: {current_time} ({current_weekday})。今天是{today}，明天是{tomorrow}，后天是{day_after}，昨天是{yesterday}。"""
 
 
 class SkillMiddleware(AgentMiddleware):
