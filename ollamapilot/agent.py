@@ -101,6 +101,9 @@ class OllamaPilotAgent:
         else:
             self.checkpointer = None
 
+        # 保存最大工具调用次数（用于设置 recursion_limit）
+        self.max_tool_calls = max_tool_calls
+
         # 构建中间件列表
         middleware = self._build_middleware(max_tool_calls)
 
@@ -197,8 +200,11 @@ class OllamaPilotAgent:
         if self.verbose:
             print(f"🤖 用户: {query}")
 
-        # 配置
-        config = {"configurable": {"thread_id": thread_id or "default"}}
+        # 配置（包含 recursion_limit 以防止 LangGraph 默认限制）
+        config = {
+            "configurable": {"thread_id": thread_id or "default"},
+            "recursion_limit": self.max_tool_calls + 10  # 给一些余量
+        }
 
         # 执行
         result = self.agent.invoke(
@@ -276,7 +282,11 @@ class OllamaPilotAgent:
         Yields:
             事件字典，包含 event, name, data 等字段
         """
-        config = {"configurable": {"thread_id": thread_id or "default"}}
+        # 配置（包含 recursion_limit 以防止 LangGraph 默认限制）
+        config = {
+            "configurable": {"thread_id": thread_id or "default"},
+            "recursion_limit": self.max_tool_calls + 10  # 给一些余量
+        }
 
         # 只传入当前用户消息，历史消息由 checkpointer 自动管理
         # LangChain Agent 会自动从 checkpointer 加载历史消息并合并
@@ -416,6 +426,7 @@ def create_ollama_agent(
     model: BaseChatModel,
     skills_dir: Optional[str] = None,
     enable_memory: bool = True,
+    max_tool_calls: Optional[int] = None,
     verbose: bool = True,
     **kwargs
 ) -> OllamaPilotAgent:
@@ -428,6 +439,7 @@ def create_ollama_agent(
         model: 聊天模型实例
         skills_dir: Skill 目录路径
         enable_memory: 是否启用对话记忆
+        max_tool_calls: 最大工具调用次数，默认从配置文件读取 RECURSION_LIMIT
         verbose: 是否显示详细执行过程
         **kwargs: 其他参数传递给 OllamaPilotAgent
 
@@ -441,10 +453,17 @@ def create_ollama_agent(
         >>> agent = create_ollama_agent(model, skills_dir="skills")
         >>> response = agent.invoke("明天苏州天气怎么样？")
     """
+    # 如果未指定 max_tool_calls，从配置文件读取
+    if max_tool_calls is None:
+        from ollamapilot.config import get_config
+        config = get_config()
+        max_tool_calls = config.get_int('RECURSION_LIMIT', 50)
+
     return OllamaPilotAgent(
         model=model,
         skills_dir=skills_dir,
         enable_memory=enable_memory,
+        max_tool_calls=max_tool_calls,
         verbose=verbose,
         **kwargs
     )
