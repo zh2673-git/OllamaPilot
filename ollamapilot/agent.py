@@ -306,7 +306,16 @@ class OllamaPilotAgent:
                     force_messages.append(AIMessage(content=explanation))
 
                 elif isinstance(msg, ToolMessage):
-                    tool_results.append(msg)
+                    # 截断过长的 ToolMessage 内容，避免模型无法处理
+                    # 限制在 2000 字符以内，保留关键信息
+                    content = msg.content
+                    if len(content) > 2000:
+                        content = content[:2000] + "\n... (内容已截断)"
+                    tool_results.append(ToolMessage(
+                        content=content,
+                        tool_call_id=msg.tool_call_id,
+                        name=msg.name
+                    ))
 
             # 添加所有 ToolMessage
             force_messages.extend(tool_results)
