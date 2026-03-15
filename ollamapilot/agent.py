@@ -252,9 +252,9 @@ class OllamaPilotAgent:
             强制生成的回复
         """
         try:
-            # 从 checkpointer 获取完整的对话历史（包含 ToolMessage）
+            # 使用传入的 messages 作为基础（可能包含最新的 AIMessage）
             thread_id = config.get("configurable", {}).get("thread_id", "default")
-            full_messages = messages
+            full_messages = messages.copy() if messages else []
 
             if self.checkpointer:
                 try:
@@ -263,21 +263,30 @@ class OllamaPilotAgent:
                     if checkpoint_tuple and checkpoint_tuple.checkpoint:
                         # 尝试不同的消息存储位置
                         checkpoint = checkpoint_tuple.checkpoint
+                        checkpoint_messages = None
 
                         # 方法1: 直接获取 messages
                         if "messages" in checkpoint:
-                            full_messages = checkpoint["messages"]
+                            checkpoint_messages = checkpoint["messages"]
                         # 方法2: 从 channel_values 获取 (LangGraph 新格式)
                         elif "channel_values" in checkpoint:
                             channel_values = checkpoint["channel_values"]
                             if "messages" in channel_values:
-                                full_messages = channel_values["messages"]
+                                checkpoint_messages = channel_values["messages"]
                         # 方法3: 从完整状态获取
                         elif checkpoint_tuple.state and "messages" in checkpoint_tuple.state:
-                            full_messages = checkpoint_tuple.state["messages"]
+                            checkpoint_messages = checkpoint_tuple.state["messages"]
 
-                        if self.verbose:
-                            print(f"   [ForceResponse] 从 checkpointer 加载了 {len(full_messages)} 条消息")
+                        if checkpoint_messages:
+                            # 合并消息：优先使用传入的 messages，但补充 checkpointer 中的 ToolMessage
+                            # 因为传入的 messages 可能缺少 ToolMessage
+                            if len(checkpoint_messages) > len(full_messages):
+                                full_messages = checkpoint_messages
+                                if self.verbose:
+                                    print(f"   [ForceResponse] 从 checkpointer 加载了 {len(full_messages)} 条消息")
+                            else:
+                                if self.verbose:
+                                    print(f"   [ForceResponse] 使用传入的 {len(full_messages)} 条消息")
                 except Exception as e:
                     if self.verbose:
                         print(f"   [ForceResponse] 从 checkpointer 加载失败: {e}")
