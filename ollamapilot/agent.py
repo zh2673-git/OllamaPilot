@@ -252,110 +252,61 @@ class OllamaPilotAgent:
             强制生成的回复
         """
         try:
-            # 使用传入的 messages 作为基础（可能包含最新的 AIMessage）
-            thread_id = config.get("configurable", {}).get("thread_id", "default")
-            full_messages = messages.copy() if messages else []
-
-            if self.checkpointer:
-                try:
-                    # 尝试从 checkpointer 获取完整历史
-                    checkpoint_tuple = self.checkpointer.get_tuple({"configurable": {"thread_id": thread_id}})
-                    if checkpoint_tuple and checkpoint_tuple.checkpoint:
-                        # 尝试不同的消息存储位置
-                        checkpoint = checkpoint_tuple.checkpoint
-                        checkpoint_messages = None
-
-                        # 方法1: 直接获取 messages
-                        if "messages" in checkpoint:
-                            checkpoint_messages = checkpoint["messages"]
-                        # 方法2: 从 channel_values 获取 (LangGraph 新格式)
-                        elif "channel_values" in checkpoint:
-                            channel_values = checkpoint["channel_values"]
-                            if "messages" in channel_values:
-                                checkpoint_messages = channel_values["messages"]
-                        # 方法3: 从完整状态获取
-                        elif checkpoint_tuple.state and "messages" in checkpoint_tuple.state:
-                            checkpoint_messages = checkpoint_tuple.state["messages"]
-
-                        if checkpoint_messages:
-                            # 合并消息：优先使用传入的 messages，但补充 checkpointer 中的 ToolMessage
-                            # 因为传入的 messages 可能缺少 ToolMessage
-                            if len(checkpoint_messages) > len(full_messages):
-                                full_messages = checkpoint_messages
-                                if self.verbose:
-                                    print(f"   [ForceResponse] 从 checkpointer 加载了 {len(full_messages)} 条消息")
-                            else:
-                                if self.verbose:
-                                    print(f"   [ForceResponse] 使用传入的 {len(full_messages)} 条消息")
-                except Exception as e:
-                    if self.verbose:
-                        print(f"   [ForceResponse] 从 checkpointer 加载失败: {e}")
-
-            # 过滤掉系统提示词，构建清晰的消息链
             from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
-            cleaned_messages = []
-            for msg in full_messages:
-                if isinstance(msg, SystemMessage):
-                    continue
-                elif isinstance(msg, AIMessage):
-                    # 跳过空的 AIMessage（没有content也没有tool_calls）
-                    if not msg.content and not msg.tool_calls:
-                        if self.verbose:
-                            print(f"   [ForceResponse] 跳过空的 AIMessage")
-                        continue
-                    # 保留带 tool_calls 的 AIMessage，但添加说明文本
-                    if msg.tool_calls and not msg.content:
-                        # 创建一个新的 AIMessage，添加说明文本
-                        tool_names = [tc.get('name', 'unknown') for tc in msg.tool_calls]
-                        explanation = f"我需要调用工具来获取信息：{', '.join(tool_names)}"
-                        # 创建新的 AIMessage，保留 tool_calls 但添加 content
-                        new_msg = AIMessage(
-                            content=explanation,
-                            tool_calls=msg.tool_calls,
-                            id=msg.id if hasattr(msg, 'id') else None
-                        )
-                        cleaned_messages.append(new_msg)
-                        if self.verbose:
-                            print(f"   [ForceResponse] 为带 tool_calls 的 AIMessage 添加说明: {explanation}")
-                        continue
-                    cleaned_messages.append(msg)
-                elif isinstance(msg, (HumanMessage, ToolMessage)):
-                    cleaned_messages.append(msg)
-                elif hasattr(msg, "content"):
-                    cleaned_messages.append(msg)
 
-            # 只保留最后一次查询的消息（从最后一个 HumanMessage 开始）
-            # 找到最后一个 HumanMessage 的位置
-            last_human_index = -1
-            for i in range(len(cleaned_messages) - 1, -1, -1):
-                if isinstance(cleaned_messages[i], HumanMessage):
-                    last_human_index = i
+            # 构建用于强制回复的消息链
+            # 包含：HumanMessage -> AIMessage(工具调用说明) -> ToolMessage
+            force_messages = []
+
+            # 找到最后一条 HumanMessage
+            last_human_msg = None
+            for msg in reversed(messages):
+                if isinstance(msg, HumanMessage):
+                    last_human_msg = msg
                     break
 
-            if last_human_index >= 0:
-                cleaned_messages = cleaned_messages[last_human_index:]
-                if self.verbose:
-                    print(f"   [ForceResponse] 截取最后一次查询，从 HumanMessage[{last_human_index}] 开始")
+            if not last_human_msg:
+                return "（无法找到用户查询）"
+
+            force_messages.append(last_human_msg)
+
+            # 查找工具调用和对应的 ToolMessage
+            tool_call_found = False
+            tool_results = []
+
+            for msg in messages:
+                if isinstance(msg, AIMessage) and msg.tool_calls:
+                    tool_call_found = True
+                    # 添加工具调用说明
+                    tool_names = [tc.get('name', 'unknown') for tc in msg.tool_calls]
+                    explanation = f"我需要调用工具来获取信息：{', '.join(tool_names)}"
+                    force_messages.append(AIMessage(content=explanation))
+
+                elif isinstance(msg, ToolMessage):
+                    tool_results.append(msg)
+
+            # 添加所有 ToolMessage
+            force_messages.extend(tool_results)
 
             if self.verbose:
-                print(f"   [ForceResponse] 清理后消息数: {len(cleaned_messages)}")
-                # 打印消息类型摘要
-                for i, msg in enumerate(cleaned_messages):
-                    msg_type = type(msg).__name__
-                    has_content = bool(getattr(msg, 'content', None))
-                    has_tools = bool(getattr(msg, 'tool_calls', None))
-                    print(f"      [{i}] {msg_type} (content:{has_content}, tools:{has_tools})")
+                print(f"   [ForceResponse] 构建消息链: {len(force_messages)} 条")
+                for i, msg in enumerate(force_messages):
+                    print(f"      [{i}] {type(msg).__name__}")
+
+            # 如果没有找到工具调用，直接返回提示
+            if not tool_call_found:
+                return "（工具执行完成）"
 
             # 添加强制回复提示
-            force_messages = cleaned_messages + [
+            force_messages.append(
                 HumanMessage(content="请基于上述工具执行结果，直接回答用户的问题。不要调用任何工具。")
-            ]
+            )
 
-            # 临时禁用工具调用，强制模型只生成文本回复
+            # 使用模型生成回复
             result = self.model.invoke(force_messages)
 
-            if hasattr(result, "content"):
-                return result.content or "（工具执行完成，但无法生成详细回复）"
+            if hasattr(result, "content") and result.content:
+                return result.content
 
         except Exception as e:
             if self.verbose:
