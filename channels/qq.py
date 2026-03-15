@@ -294,6 +294,20 @@ class QQChannel(Channel):
                 else:
                     text = await resp.text()
                     print(f"⚠️ 发送单聊消息失败: {resp.status} - {text}")
+                    # 处理内容违规错误(40034)
+                    if resp.status == 400 and "40034" in text:
+                        print(f"   [ContentFilter] 消息内容被QQ平台拦截，尝试发送简化提示...")
+                        fallback_msg = "抱歉，回复内容包含敏感信息被平台拦截。请尝试询问其他话题。"
+                        fallback_data = {
+                            "content": fallback_msg,
+                            "msg_type": 0,
+                        }
+                        if msg_id:
+                            fallback_data["msg_id"] = msg_id
+                        async with self.session.post(url, json=fallback_data, headers=headers) as fallback_resp:
+                            if fallback_resp.status == 200:
+                                print(f"✅ 已发送简化提示给用户 {user_id}")
+                                return True
                     return False
         except Exception as e:
             print(f"⚠️ 发送单聊消息异常: {e}")
@@ -328,6 +342,20 @@ class QQChannel(Channel):
                 else:
                     text = await resp.text()
                     print(f"⚠️ 发送群消息失败: {resp.status} - {text}")
+                    # 处理内容违规错误(40034)
+                    if resp.status == 400 and "40034" in text:
+                        print(f"   [ContentFilter] 消息内容被QQ平台拦截，尝试发送简化提示...")
+                        fallback_msg = "抱歉，回复内容包含敏感信息被平台拦截。请尝试询问其他话题。"
+                        fallback_data = {
+                            "content": fallback_msg,
+                            "msg_type": 0,
+                        }
+                        if msg_id:
+                            fallback_data["msg_id"] = msg_id
+                        async with self.session.post(url, json=fallback_data, headers=headers) as fallback_resp:
+                            if fallback_resp.status == 200:
+                                print(f"✅ 已发送简化提示到群 {group_id}")
+                                return True
                     return False
         except Exception as e:
             print(f"⚠️ 发送群消息异常: {e}")
