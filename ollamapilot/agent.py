@@ -289,15 +289,25 @@ class OllamaPilotAgent:
                 if isinstance(msg, SystemMessage):
                     continue
                 elif isinstance(msg, AIMessage):
-                    # 跳过所有 tool_calls 的 AIMessage（工具调用请求）
-                    if msg.tool_calls:
-                        if self.verbose:
-                            print(f"   [ForceResponse] 跳过带 tool_calls 的 AIMessage")
-                        continue
-                    # 跳过空的 AIMessage
-                    if not msg.content:
+                    # 跳过空的 AIMessage（没有content也没有tool_calls）
+                    if not msg.content and not msg.tool_calls:
                         if self.verbose:
                             print(f"   [ForceResponse] 跳过空的 AIMessage")
+                        continue
+                    # 保留带 tool_calls 的 AIMessage，但添加说明文本
+                    if msg.tool_calls and not msg.content:
+                        # 创建一个新的 AIMessage，添加说明文本
+                        tool_names = [tc.get('name', 'unknown') for tc in msg.tool_calls]
+                        explanation = f"我需要调用工具来获取信息：{', '.join(tool_names)}"
+                        # 创建新的 AIMessage，保留 tool_calls 但添加 content
+                        new_msg = AIMessage(
+                            content=explanation,
+                            tool_calls=msg.tool_calls,
+                            id=msg.id if hasattr(msg, 'id') else None
+                        )
+                        cleaned_messages.append(new_msg)
+                        if self.verbose:
+                            print(f"   [ForceResponse] 为带 tool_calls 的 AIMessage 添加说明: {explanation}")
                         continue
                     cleaned_messages.append(msg)
                 elif isinstance(msg, (HumanMessage, ToolMessage)):
