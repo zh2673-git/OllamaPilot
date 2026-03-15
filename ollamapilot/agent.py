@@ -235,29 +235,6 @@ class OllamaPilotAgent:
                 print("🔄 检测到工具调用后无回复，强制生成回复...")
             response = self._force_response(messages, config)
 
-            # 将强制生成的回复保存到 checkpointer，保持会话历史一致性
-            if response and not response.startswith("（工具执行完成"):
-                try:
-                    from langchain_core.messages import AIMessage
-                    # 创建新的 AIMessage 并添加到历史
-                    forced_message = AIMessage(content=response)
-                    # 更新 checkpointer 中的消息历史
-                    if self.checkpointer:
-                        checkpoint_tuple = self.checkpointer.get_tuple(config)
-                        if checkpoint_tuple and checkpoint_tuple.checkpoint:
-                            checkpoint = checkpoint_tuple.checkpoint
-                            if "channel_values" in checkpoint and "messages" in checkpoint["channel_values"]:
-                                checkpoint["channel_values"]["messages"].append(forced_message)
-                            elif "messages" in checkpoint:
-                                checkpoint["messages"].append(forced_message)
-                            # 保存更新后的 checkpoint
-                            self.checkpointer.put(config, checkpoint)
-                            if self.verbose:
-                                print(f"   [ForceResponse] 已将强制回复保存到会话历史")
-                except Exception as e:
-                    if self.verbose:
-                        print(f"   [ForceResponse] 保存到会话历史失败: {e}")
-
         if self.verbose and response:
             print(f"🤖 AI: {response[:200]}{'...' if len(response) > 200 else ''}")
 
@@ -334,11 +311,18 @@ class OllamaPilotAgent:
                 HumanMessage(content="请基于上述工具执行结果，直接回答用户的问题。不要调用任何工具。")
             )
 
-            # 使用模型生成回复
-            result = self.model.invoke(force_messages)
+            # 使用 Agent 生成回复（保持与正常流程一致）
+            result = self.agent.invoke(
+                {"messages": force_messages},
+                config
+            )
 
-            if hasattr(result, "content") and result.content:
-                return result.content
+            # 从结果中提取最后一条消息的回复
+            result_messages = result.get("messages", [])
+            if result_messages:
+                last_message = result_messages[-1]
+                if hasattr(last_message, "content") and last_message.content:
+                    return last_message.content
 
         except Exception as e:
             if self.verbose:
