@@ -233,40 +233,7 @@ class OllamaPilotAgent:
         if has_tool_calls and not response.strip():
             if self.verbose:
                 print("🔄 检测到工具调用后无回复，强制生成回复...")
-            # 从 checkpointer 获取完整消息历史（可能包含模型生成的回复）
-            if self.checkpointer:
-                try:
-                    checkpoint_tuple = self.checkpointer.get_tuple(config)
-                    if checkpoint_tuple and checkpoint_tuple.checkpoint:
-                        checkpoint = checkpoint_tuple.checkpoint
-                        checkpoint_messages = None
-                        if "channel_values" in checkpoint and "messages" in checkpoint["channel_values"]:
-                            checkpoint_messages = checkpoint["channel_values"]["messages"]
-                        elif "messages" in checkpoint:
-                            checkpoint_messages = checkpoint["messages"]
-
-                        if checkpoint_messages:
-                            # 检查 checkpointer 中的最后一条消息是否有内容
-                            last_checkpoint_msg = checkpoint_messages[-1]
-                            if (hasattr(last_checkpoint_msg, "content") and
-                                last_checkpoint_msg.content and
-                                isinstance(last_checkpoint_msg, AIMessage) and
-                                not last_checkpoint_msg.tool_calls):
-                                # checkpointer 中有有效回复，直接使用
-                                response = last_checkpoint_msg.content
-                                if self.verbose:
-                                    print(f"   从 checkpointer 获取到有效回复，跳过强制生成")
-                            else:
-                                # 确实需要强制回复
-                                response = self._force_response(messages, config)
-                        else:
-                            response = self._force_response(messages, config)
-                except Exception as e:
-                    if self.verbose:
-                        print(f"   从 checkpointer 检查回复失败: {e}")
-                    response = self._force_response(messages, config)
-            else:
-                response = self._force_response(messages, config)
+            response = self._force_response(messages, config)
 
         if self.verbose and response:
             print(f"🤖 AI: {response[:200]}{'...' if len(response) > 200 else ''}")
@@ -315,15 +282,20 @@ class OllamaPilotAgent:
                     if self.verbose:
                         print(f"   [ForceResponse] 从 checkpointer 加载失败: {e}")
 
-            # 过滤掉系统提示词和空的AIMessage，只保留最后一次查询的消息
+            # 过滤掉系统提示词，构建清晰的消息链
             from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
             cleaned_messages = []
             for msg in full_messages:
                 if isinstance(msg, SystemMessage):
                     continue
                 elif isinstance(msg, AIMessage):
-                    # 跳过空的 AIMessage（模型调用工具后没有生成回复的情况）
-                    if not msg.content and not msg.tool_calls:
+                    # 跳过所有 tool_calls 的 AIMessage（工具调用请求）
+                    if msg.tool_calls:
+                        if self.verbose:
+                            print(f"   [ForceResponse] 跳过带 tool_calls 的 AIMessage")
+                        continue
+                    # 跳过空的 AIMessage
+                    if not msg.content:
                         if self.verbose:
                             print(f"   [ForceResponse] 跳过空的 AIMessage")
                         continue
