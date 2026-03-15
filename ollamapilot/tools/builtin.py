@@ -727,7 +727,11 @@ def web_search(query: str, count: int = 5, auto_start: bool = True) -> str:
                 url = result.url if hasattr(result, 'url') else ""
                 snippet = result.snippet if hasattr(result, 'snippet') else "无描述"
                 source = result.source if hasattr(result, 'source') else "unknown"
-                
+
+                # 截断过长的摘要，避免超出模型上下文限制
+                if len(snippet) > 500:
+                    snippet = snippet[:500] + "..."
+
                 output.append(f"{i}. {title}")
                 output.append(f"   URL: {url}")
                 output.append(f"   来源: {source}")
