@@ -282,7 +282,7 @@ class OllamaPilotAgent:
                     if self.verbose:
                         print(f"   [ForceResponse] 从 checkpointer 加载失败: {e}")
 
-            # 过滤掉系统提示词和空的AIMessage，只保留对话相关消息
+            # 过滤掉系统提示词和空的AIMessage，只保留最后一次查询的消息
             from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
             cleaned_messages = []
             for msg in full_messages:
@@ -299,6 +299,19 @@ class OllamaPilotAgent:
                     cleaned_messages.append(msg)
                 elif hasattr(msg, "content"):
                     cleaned_messages.append(msg)
+
+            # 只保留最后一次查询的消息（从最后一个 HumanMessage 开始）
+            # 找到最后一个 HumanMessage 的位置
+            last_human_index = -1
+            for i in range(len(cleaned_messages) - 1, -1, -1):
+                if isinstance(cleaned_messages[i], HumanMessage):
+                    last_human_index = i
+                    break
+
+            if last_human_index >= 0:
+                cleaned_messages = cleaned_messages[last_human_index:]
+                if self.verbose:
+                    print(f"   [ForceResponse] 截取最后一次查询，从 HumanMessage[{last_human_index}] 开始")
 
             if self.verbose:
                 print(f"   [ForceResponse] 清理后消息数: {len(cleaned_messages)}")
