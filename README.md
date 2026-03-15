@@ -529,7 +529,19 @@ agent = create_agent(model, middleware=[mcp_mw])
 
 ## 📋 版本历史
 
-### v0.3.3 (当前) - Markdown Skill 工具修复与稳定性提升
+### v0.3.4 (当前) - 强制回复机制修复与稳定性提升
+
+**🎉 修复强制回复问题 + 提升系统稳定性**
+
+- ✅ **强制回复修复**：修复模型在强制回复时无法识别工具执行结果的问题
+- ✅ **空消息过滤**：清理空的 `AIMessage`，确保模型基于 `ToolMessage` 生成回复
+- ✅ **消息历史优化**：从 checkpointer 加载完整消息历史，包含工具执行结果
+- ✅ **上下文净化**：过滤 `SystemMessage`，避免上下文污染
+
+<details>
+<summary>📜 历史版本（点击展开）</summary>
+
+### v0.3.3 - Markdown Skill 工具修复与稳定性提升
 
 **🎉 修复关键 Bug + 提升系统稳定性**
 
@@ -579,6 +591,8 @@ agent = create_agent(model, middleware=[mcp_mw])
 - ✅ **错误重试**：使用 tenacity 实现指数退避重试
 - ✅ **运行统计**：记录消息数、成功率、响应时间
 - ✅ **配置模板**：提供 config.example.yaml，用户可安全 Fork
+
+</details>
 
 ### v0.2.8 - 流式输出优化与异步中间件
 

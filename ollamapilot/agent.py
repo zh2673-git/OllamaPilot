@@ -252,9 +252,66 @@ class OllamaPilotAgent:
             强制生成的回复
         """
         try:
-            # 添加系统提示，要求模型基于工具结果生成回复
-            force_messages = messages + [
-                HumanMessage(content="请基于上述工具执行结果，生成一个完整的回复。不要调用任何工具，直接回答用户的问题。")
+            # 从 checkpointer 获取完整的对话历史（包含 ToolMessage）
+            thread_id = config.get("configurable", {}).get("thread_id", "default")
+            full_messages = messages
+
+            if self.checkpointer:
+                try:
+                    # 尝试从 checkpointer 获取完整历史
+                    checkpoint_tuple = self.checkpointer.get_tuple({"configurable": {"thread_id": thread_id}})
+                    if checkpoint_tuple and checkpoint_tuple.checkpoint:
+                        # 尝试不同的消息存储位置
+                        checkpoint = checkpoint_tuple.checkpoint
+
+                        # 方法1: 直接获取 messages
+                        if "messages" in checkpoint:
+                            full_messages = checkpoint["messages"]
+                        # 方法2: 从 channel_values 获取 (LangGraph 新格式)
+                        elif "channel_values" in checkpoint:
+                            channel_values = checkpoint["channel_values"]
+                            if "messages" in channel_values:
+                                full_messages = channel_values["messages"]
+                        # 方法3: 从完整状态获取
+                        elif checkpoint_tuple.state and "messages" in checkpoint_tuple.state:
+                            full_messages = checkpoint_tuple.state["messages"]
+
+                        if self.verbose:
+                            print(f"   [ForceResponse] 从 checkpointer 加载了 {len(full_messages)} 条消息")
+                except Exception as e:
+                    if self.verbose:
+                        print(f"   [ForceResponse] 从 checkpointer 加载失败: {e}")
+
+            # 过滤掉系统提示词和空的AIMessage，只保留对话相关消息
+            from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
+            cleaned_messages = []
+            for msg in full_messages:
+                if isinstance(msg, SystemMessage):
+                    continue
+                elif isinstance(msg, AIMessage):
+                    # 跳过空的 AIMessage（模型调用工具后没有生成回复的情况）
+                    if not msg.content and not msg.tool_calls:
+                        if self.verbose:
+                            print(f"   [ForceResponse] 跳过空的 AIMessage")
+                        continue
+                    cleaned_messages.append(msg)
+                elif isinstance(msg, (HumanMessage, ToolMessage)):
+                    cleaned_messages.append(msg)
+                elif hasattr(msg, "content"):
+                    cleaned_messages.append(msg)
+
+            if self.verbose:
+                print(f"   [ForceResponse] 清理后消息数: {len(cleaned_messages)}")
+                # 打印消息类型摘要
+                for i, msg in enumerate(cleaned_messages):
+                    msg_type = type(msg).__name__
+                    has_content = bool(getattr(msg, 'content', None))
+                    has_tools = bool(getattr(msg, 'tool_calls', None))
+                    print(f"      [{i}] {msg_type} (content:{has_content}, tools:{has_tools})")
+
+            # 添加强制回复提示
+            force_messages = cleaned_messages + [
+                HumanMessage(content="请基于上述工具执行结果，直接回答用户的问题。不要调用任何工具。")
             ]
 
             # 临时禁用工具调用，强制模型只生成文本回复
@@ -266,6 +323,8 @@ class OllamaPilotAgent:
         except Exception as e:
             if self.verbose:
                 print(f"⚠️ 强制生成回复失败: {e}")
+                import traceback
+                traceback.print_exc()
 
         return "（工具执行完成，但生成回复失败）"
 
