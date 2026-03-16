@@ -2,15 +2,19 @@
 模型上下文窗口管理模块
 
 提供自动检测和管理 Ollama 模型上下文窗口大小的功能。
-支持从 Ollama API 获取模型信息，并根据模型能力动态调整配置。
+支持从 Ollama API 获取模型信息，并根据模型能力和硬件配置动态调整配置。
 """
 
 import requests
 import json
 import os
-from typing import Optional, Dict, List, Union
+import platform
+import subprocess
+import hashlib
+from typing import Optional, Dict, List, Union, Tuple
 from functools import lru_cache
 from pathlib import Path
+from datetime import datetime, timedelta
 
 
 class ModelContextManager:
@@ -20,8 +24,9 @@ class ModelContextManager:
     功能：
     1. 自动扫描 Ollama 中已安装的模型
     2. 自动检测每个模型的 context_length
-    3. 根据模型能力计算工具输出截断阈值
+    3. 根据模型能力和硬件配置（显存）计算最优 num_ctx
     4. 缓存检测结果到文件，避免重复查询
+    5. 支持硬件指纹，硬件变化时自动重新计算
     
     使用示例：
         >>> manager = ModelContextManager()
@@ -30,22 +35,38 @@ class ModelContextManager:
         >>> ctx_length = manager.get_context_length("qwen3.5:4b")
         >>> print(ctx_length)  # 262144
         >>> 
-        >>> threshold = manager.get_truncation_threshold("qwen3.5:4b")
-        >>> print(threshold)  # 50000 (根据 256K 计算得出)
+        >>> # 获取基于硬件配置的最优 num_ctx
+        >>> num_ctx = manager.get_recommended_num_ctx("qwen3.5:4b")
+        >>> print(num_ctx)  # 根据显存动态计算，如 131072
     """
     
-    # 截断阈值配置（基于 context_length 的百分比和绝对值）
-    TRUNCATION_THRESHOLDS = [
-        # (max_context_length, threshold_value)
-        # context_length <= 8K: 保守截断，使用 25%
-        (8192, 2000),
-        # 8K < context_length <= 32K: 中等截断，使用 25%
-        (32768, 8000),
-        # 32K < context_length <= 128K: 宽松截断，使用 15%
-        (131072, 20000),
-        # context_length > 128K: 最小截断，使用 10%
-        (float('inf'), 50000),
-    ]
+    # 截断阈值配置（基于 num_ctx 的百分比）
+    # 工具输出占用不超过 num_ctx 的 30%
+    TOOL_TRUNCATION_RATIO = 0.3
+    
+    # KV Cache 系数表 (MB per 1K tokens, INT4/Q4_K_M 精度)
+    # 基于公式: 2 × 层数 × 隐藏维度 × 精度字节数 / 1024
+    KV_CACHE_COEFFICIENTS = {
+        # 模型规模 -> MB/1K tokens
+        "1B": 18,    # 估算
+        "4B": 37,    # qwen3.5:4b 等
+        "7B": 64,    # llama3:8b 等
+        "8B": 64,    # llama3:8b 等
+        "13B": 120,  # 估算
+        "70B": 640,  # 需要40GB+显存
+    }
+    
+    # 模型规模映射（从模型名称估算）
+    MODEL_SIZE_PATTERNS = {
+        "0.5b": "1B", "1b": "1B", "1.5b": "1B",
+        "4b": "4B", "3b": "4B", "3.5b": "4B",
+        "7b": "7B", "8b": "8B",
+        "13b": "13B", "14b": "13B",
+        "70b": "70B", "72b": "70B",
+    }
+    
+    # 缓存有效期（天）
+    CACHE_EXPIRY_DAYS = 7
     
     def __init__(self, base_url: str = "http://localhost:11434", cache_dir: Optional[str] = None):
         """
@@ -85,6 +106,171 @@ class ModelContextManager:
                 json.dump(self._cache, f, indent=2, ensure_ascii=False)
         except Exception:
             pass
+    
+    def _get_hardware_fingerprint(self) -> str:
+        """
+        获取硬件指纹
+        
+        用于检测硬件是否变化，变化时需要重新计算 num_ctx。
+        
+        Returns:
+            硬件指纹字符串
+        """
+        try:
+            # 获取 GPU 信息
+            gpu_info = self._get_gpu_info()
+            
+            # 组合硬件信息
+            hardware_str = f"{platform.system()}|{platform.machine()}|{gpu_info}"
+            
+            # 计算哈希
+            return hashlib.md5(hardware_str.encode()).hexdigest()[:16]
+        except Exception:
+            return "unknown"
+    
+    def _get_gpu_info(self) -> str:
+        """
+        获取 GPU 信息字符串
+        
+        Returns:
+            GPU 型号和驱动信息
+        """
+        try:
+            if platform.system() == "Windows":
+                # Windows: 使用 PowerShell
+                ps_cmd = "Get-CimInstance -ClassName Win32_VideoController | Select-Object -ExpandProperty Name"
+                result = subprocess.run(
+                    ["powershell", "-Command", ps_cmd],
+                    capture_output=True, text=True, timeout=5
+                )
+                gpu_names = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
+                return "|".join(gpu_names) if gpu_names else "unknown"
+            else:
+                # Linux/Mac: 尝试使用 nvidia-smi
+                result = subprocess.run(
+                    ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                    capture_output=True, text=True, timeout=5
+                )
+                gpu_names = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
+                return "|".join(gpu_names) if gpu_names else "unknown"
+        except Exception:
+            return "unknown"
+    
+    def detect_vram(self) -> Optional[float]:
+        """
+        检测可用显存（GB）
+        
+        Returns:
+            可用显存（GB），检测失败返回 None
+        """
+        try:
+            if platform.system() == "Windows":
+                return self._detect_vram_windows()
+            else:
+                return self._detect_vram_linux()
+        except Exception:
+            return None
+    
+    def _detect_vram_windows(self) -> Optional[float]:
+        """Windows 下检测显存"""
+        try:
+            # 使用 PowerShell 获取显存信息（兼容新版 Windows）
+            # 注意：PowerShell 中除法使用 / 但需要确保是数字类型
+            ps_cmd = "Get-CimInstance -ClassName Win32_VideoController | Select-Object -ExpandProperty AdapterRAM | ForEach-Object { [math]::Round($_, 2) }"
+            result = subprocess.run(
+                ["powershell", "-Command", ps_cmd],
+                capture_output=True, text=True, timeout=5
+            )
+            lines = result.stdout.strip().split('\n')
+            total_vram = 0
+            for line in lines:
+                line = line.strip()
+                if line:
+                    try:
+                        # AdapterRAM 以字节为单位
+                        vram_bytes = int(float(line))
+                        vram_gb = vram_bytes / (1024 ** 3)
+                        if vram_gb > 0:
+                            total_vram += vram_gb
+                    except ValueError:
+                        continue
+            return total_vram if total_vram > 0 else None
+        except Exception:
+            return None
+    
+    def _detect_vram_linux(self) -> Optional[float]:
+        """Linux 下检测显存"""
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5
+            )
+            lines = result.stdout.strip().split('\n')
+            total_vram = 0
+            for line in lines:
+                line = line.strip()
+                if line:
+                    total_vram += float(line) / 1024  # MB 转 GB
+            return total_vram if total_vram > 0 else None
+        except Exception:
+            return None
+    
+    def _estimate_model_size(self, model_name: str) -> str:
+        """
+        从模型名称估算模型规模
+        
+        Args:
+            model_name: 模型名称（如 "qwen3.5:4b"）
+            
+        Returns:
+            模型规模（如 "4B"）
+        """
+        model_lower = model_name.lower()
+        
+        # 尝试匹配已知模式
+        for pattern, size in self.MODEL_SIZE_PATTERNS.items():
+            if pattern in model_lower:
+                return size
+        
+        # 默认返回 7B
+        return "7B"
+    
+    def _get_kv_cache_coefficient(self, model_size: str) -> float:
+        """
+        获取 KV Cache 系数
+        
+        Args:
+            model_size: 模型规模（如 "4B"）
+            
+        Returns:
+            MB per 1K tokens
+        """
+        return self.KV_CACHE_COEFFICIENTS.get(model_size, 64)  # 默认 64MB/1K
+    
+    def _align_context_value(self, ctx: int) -> int:
+        """
+        对齐到常见的上下文值
+        
+        策略：向下取整到不超过计算值的最大档位（保守策略）
+        例如：138K -> 128K (131072)，而不是 256K
+        
+        Args:
+            ctx: 计算出的上下文值
+            
+        Returns:
+            对齐后的值
+        """
+        common_values = [8192, 16384, 32768, 65536, 131072, 262144]
+        
+        # 找到不超过计算值的最大档位（向下取整）
+        result = 8192  # 最小保底值
+        for val in common_values:
+            if ctx >= val:
+                result = val
+            else:
+                break
+        
+        return result
     
     def list_installed_models(self) -> List[str]:
         """
@@ -286,27 +472,158 @@ class ModelContextManager:
         
         return max(min_threshold, min(threshold, max_threshold))
     
-    def get_recommended_num_ctx(self, model_name: str) -> int:
+    def get_recommended_num_ctx(self, model_name: str, mode: str = "auto") -> int:
         """
         获取建议的 num_ctx 值
         
-        对于大上下文模型，建议设置一个合理的上限，避免：
-        1. 内存不足
-        2. 推理速度过慢
-        3. 实际不需要那么大上下文
+        支持三种模式：
+        1. "auto" - 自动检测显存并计算最优值（默认）
+        2. "max" - 使用模型最大能力
+        3. "conservative" - 使用保守值（32K）
+        
+        对于 "auto" 模式：
+        - 检测当前硬件配置（显存）
+        - 根据模型规模计算 KV Cache 占用
+        - 返回最优的 num_ctx 值
+        - 结果会被缓存，硬件变化时自动重新计算
         
         Args:
             model_name: 模型名称
+            mode: 计算模式 ("auto", "max", "conservative")
             
         Returns:
             建议的 num_ctx 值
+            
+        Example:
+            >>> manager = ModelContextManager()
+            >>> # 自动模式（基于硬件）
+            >>> manager.get_recommended_num_ctx("qwen3.5:4b")
+            131072  # 根据显存动态计算
+            >>> # 最大能力模式
+            >>> manager.get_recommended_num_ctx("qwen3.5:4b", mode="max")
+            262144
+            >>> # 保守模式
+            >>> manager.get_recommended_num_ctx("qwen3.5:4b", mode="conservative")
+            32768
         """
         context_length = self.get_context_length(model_name)
         
-        # 设置上限，避免过大导致性能问题
-        max_recommended = 32768  # 32K 作为实际使用上限
+        # max 模式：使用模型最大能力
+        if mode == "max":
+            return context_length
         
-        return min(context_length, max_recommended)
+        # conservative 模式：使用保守值
+        if mode == "conservative":
+            return min(context_length, 32768)
+        
+        # auto 模式：基于硬件配置智能计算
+        return self._calculate_optimal_num_ctx(model_name, context_length)
+    
+    def _calculate_optimal_num_ctx(self, model_name: str, max_ctx: int) -> int:
+        """
+        计算最优 num_ctx 值（基于硬件配置）
+        
+        算法：
+        1. 检测当前显存
+        2. 估算模型权重占用（INT4 量化）
+        3. 计算可用于上下文的显存
+        4. 根据 KV Cache 系数计算最大上下文
+        5. 对齐到常见值并缓存
+        
+        Args:
+            model_name: 模型名称
+            max_ctx: 模型最大上下文能力
+            
+        Returns:
+            最优 num_ctx 值
+        """
+        # 获取当前硬件指纹
+        current_fingerprint = self._get_hardware_fingerprint()
+        
+        # 检查缓存
+        cache_key = f"num_ctx_config_{model_name}"
+        cached_config = self._cache.get(cache_key)
+        
+        if cached_config:
+            # 检查缓存是否有效
+            cache_time = datetime.fromtimestamp(cached_config.get("timestamp", 0))
+            cache_age = datetime.now() - cache_time
+            cached_fingerprint = cached_config.get("hardware_fingerprint", "")
+            
+            # 缓存未过期且硬件未变化
+            if (cache_age.days < self.CACHE_EXPIRY_DAYS and 
+                cached_fingerprint == current_fingerprint):
+                return cached_config["num_ctx"]
+        
+        # 检测显存
+        vram_gb = self.detect_vram()
+        
+        # 如果自动检测失败，尝试从配置读取
+        if vram_gb is None:
+            try:
+                from ollamapilot.config import get_config
+                config_vram = get_config().get_float('CHAT_VRAM_GB', 0)
+                if config_vram > 0:
+                    vram_gb = config_vram
+            except Exception:
+                pass
+        
+        if vram_gb is None:
+            # 检测失败且未配置，使用保守值
+            result = min(max_ctx, 32768)
+            self._cache_num_ctx_config(model_name, result, current_fingerprint)
+            return result
+        
+        # 估算模型规模
+        model_size = self._estimate_model_size(model_name)
+        
+        # 模型权重占用（INT4 量化：每参数 0.5 字节）
+        model_size_gb = int(model_size.replace("B", "")) * 0.5
+        
+        # 计算可用于上下文的显存（保留 1GB 余量）
+        available_for_ctx = vram_gb - model_size_gb - 1
+        
+        if available_for_ctx <= 0:
+            # 显存不足，使用最小值
+            result = min(max_ctx, 8192)
+            self._cache_num_ctx_config(model_name, result, current_fingerprint)
+            return result
+        
+        # 获取 KV Cache 系数
+        kv_coeff = self._get_kv_cache_coefficient(model_size)
+        
+        # 计算最大上下文（KB）
+        # available_for_ctx (GB) * 1024 (MB/GB) / kv_coeff (MB/1K) = max_ctx_k
+        max_ctx_k = available_for_ctx * 1024 / kv_coeff
+        
+        # 转换为 tokens 并对齐
+        optimal_ctx = self._align_context_value(int(max_ctx_k * 1024))
+        
+        # 限制在模型最大能力内
+        optimal_ctx = min(optimal_ctx, max_ctx)
+        
+        # 缓存结果
+        self._cache_num_ctx_config(model_name, optimal_ctx, current_fingerprint)
+        
+        return optimal_ctx
+    
+    def _cache_num_ctx_config(self, model_name: str, num_ctx: int, fingerprint: str):
+        """
+        缓存 num_ctx 配置
+        
+        Args:
+            model_name: 模型名称
+            num_ctx: 计算出的 num_ctx 值
+            fingerprint: 硬件指纹
+        """
+        cache_key = f"num_ctx_config_{model_name}"
+        self._cache[cache_key] = {
+            "num_ctx": num_ctx,
+            "hardware_fingerprint": fingerprint,
+            "timestamp": datetime.now().timestamp(),
+            "vram_detected": self.detect_vram(),
+        }
+        self._save_cache()
     
     def get_all_models_info(self) -> Dict[str, Dict]:
         """

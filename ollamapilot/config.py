@@ -142,21 +142,32 @@ class Config:
         
         支持以下配置值：
         - 具体数字：如 8192, 32768
-        - 'auto'：自动检测模型能力
+        - 'auto'：自动检测模型能力和硬件配置（推荐）
+        - 'max'：使用模型最大上下文能力
+        - 'conservative'：使用保守值（32K）
         
-        当配置为 'auto' 时，会根据当前模型自动获取最优的上下文窗口大小。
+        当配置为 'auto' 时，会根据当前模型和显卡显存自动计算最优的上下文窗口大小。
+        结果会被缓存，硬件变化时自动重新计算。
         """
-        value = self.get('CHAT_NUM_CTX', '8192')
+        value = self.get('CHAT_NUM_CTX', 'auto')
         
-        # 支持 'auto' 模式
-        if value and value.lower() == 'auto':
+        if not value:
+            value = 'auto'
+        
+        value_lower = value.lower()
+        
+        # 支持 'auto', 'max', 'conservative' 模式
+        if value_lower in ('auto', 'max', 'conservative'):
             try:
-                from ollamapilot.model_context import get_recommended_num_ctx
-                return get_recommended_num_ctx(self.chat_model)
-            except Exception:
-                return 8192  # fallback
+                from ollamapilot.model_context import get_model_context_manager
+                manager = get_model_context_manager(self.ollama_base_url)
+                return manager.get_recommended_num_ctx(self.chat_model, mode=value_lower)
+            except Exception as e:
+                # fallback 到默认值
+                return 32768
         
-        return self.get_int('CHAT_NUM_CTX', 8192)
+        # 具体数字
+        return self.get_int('CHAT_NUM_CTX', 32768)
     
     @property
     def chat_num_predict(self) -> int:
