@@ -2,6 +2,7 @@
 文档处理器
 
 提供文本提取、智能分块等功能。
+支持根据模型上下文窗口动态调整分块大小。
 """
 
 from typing import List, Optional
@@ -14,18 +15,84 @@ class DocumentProcessor:
     文档处理器
 
     提供文档读取、文本提取、智能分块等功能。
+    支持根据模型上下文窗口动态调整分块大小。
     """
 
-    def __init__(self, chunk_size: int = 2000, chunk_overlap: int = 200):
+    # 分块大小配置（基于模型上下文窗口）
+    # (max_context_length, chunk_size, chunk_overlap)
+    CHUNK_SIZE_CONFIG = [
+        # <= 8K: 保守分块
+        (8192, 2000, 200),
+        # 8K - 32K: 中等分块
+        (32768, 4000, 400),
+        # 32K - 128K: 较大分块
+        (131072, 6000, 600),
+        # > 128K: 大分块
+        (float('inf'), 8000, 800),
+    ]
+
+    def __init__(self, chunk_size: int = None, chunk_overlap: int = None, context_length: int = None):
         """
         初始化文档处理器
 
         Args:
-            chunk_size: 分块大小（字符数），默认 2000
-            chunk_overlap: 块间重叠大小，默认 200
+            chunk_size: 分块大小（字符数），None 则根据 context_length 自动计算
+            chunk_overlap: 块间重叠大小，None 则根据 context_length 自动计算
+            context_length: 模型上下文窗口大小，用于自动计算分块参数
         """
-        self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
+        if chunk_size is not None and chunk_overlap is not None:
+            # 使用指定值
+            self.chunk_size = chunk_size
+            self.chunk_overlap = chunk_overlap
+        elif context_length is not None:
+            # 根据上下文窗口自动计算
+            self.chunk_size, self.chunk_overlap = self._get_chunk_config(context_length)
+        else:
+            # 默认值（保守设置）
+            self.chunk_size = 2000
+            self.chunk_overlap = 200
+
+    @classmethod
+    def from_model_name(cls, model_name: str, base_url: str = "http://localhost:11434") -> "DocumentProcessor":
+        """
+        根据模型名称创建文档处理器
+
+        自动检测模型上下文窗口并设置最优分块参数。
+
+        Args:
+            model_name: 模型名称（如 "qwen3.5:4b"）
+            base_url: Ollama 服务地址
+
+        Returns:
+            DocumentProcessor 实例
+
+        Example:
+            >>> processor = DocumentProcessor.from_model_name("qwen3.5:4b")
+            >>> print(processor.chunk_size)  # 8000 (因为 256K 上下文)
+        """
+        try:
+            from ollamapilot.model_context import get_context_length
+            context_length = get_context_length(model_name, base_url)
+            return cls(context_length=context_length)
+        except Exception:
+            # 失败时返回默认配置
+            return cls()
+
+    @classmethod
+    def _get_chunk_config(cls, context_length: int) -> tuple[int, int]:
+        """
+        根据上下文窗口大小获取分块配置
+
+        Args:
+            context_length: 模型上下文窗口大小
+
+        Returns:
+            (chunk_size, chunk_overlap)
+        """
+        for max_ctx, chunk_size, chunk_overlap in cls.CHUNK_SIZE_CONFIG:
+            if context_length <= max_ctx:
+                return chunk_size, chunk_overlap
+        return 2000, 200  # 默认
 
     def read_document(self, file_path: str) -> Optional[str]:
         """

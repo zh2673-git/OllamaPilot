@@ -194,9 +194,9 @@ class GraphRAGSkill(Skill):
         self.kb_manager = KnowledgeBaseManager(
             graph_service=self.graph_service,
             entity_extractor=self.entity_extractor,
-            document_processor=self.document_processor,
             enable_word_aligner=self.enable_word_aligner,
-            fuzzy_threshold=self.fuzzy_threshold
+            fuzzy_threshold=self.fuzzy_threshold,
+            embedding_model=self.embedding_model
         )
 
         # 检查是否有新文档需要索引

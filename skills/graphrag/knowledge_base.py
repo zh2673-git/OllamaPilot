@@ -31,6 +31,7 @@ class KnowledgeBaseManager:
     2. 增量索引新文档
     3. 管理文档状态
     4. 集成 WordAligner 精确位置映射
+    5. 根据模型上下文窗口自动调整分块大小
 
     使用方法：
         kb = KnowledgeBaseManager(graph_service, entity_extractor)
@@ -47,7 +48,8 @@ class KnowledgeBaseManager:
         document_processor: Optional[DocumentProcessor] = None,
         enable_word_aligner: bool = True,
         fuzzy_threshold: float = 0.75,
-        persist_dir: str = "./data/graphrag"
+        persist_dir: str = "./data/graphrag",
+        embedding_model: Optional[str] = None
     ):
         self.graph_service = graph_service
         # 初始化混合实体抽取器（如果没有提供）
@@ -56,11 +58,18 @@ class KnowledgeBaseManager:
         self.llm_client = SimpleLLMClient()
         self.use_llm = self.llm_client.is_available()
 
-        # 使用更大的分块大小以减少块数量
-        self.document_processor = document_processor or DocumentProcessor(
-            chunk_size=2000,
-            chunk_overlap=200
-        )
+        # 根据模型上下文窗口设置分块大小
+        if document_processor is not None:
+            self.document_processor = document_processor
+        elif embedding_model is not None:
+            # 根据 embedding 模型自动选择分块大小
+            try:
+                self.document_processor = DocumentProcessor.from_model_name(embedding_model)
+            except Exception:
+                self.document_processor = DocumentProcessor()
+        else:
+            # 默认配置
+            self.document_processor = DocumentProcessor()
 
         # 初始化 WordAligner
         self.enable_word_aligner = enable_word_aligner

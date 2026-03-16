@@ -26,6 +26,7 @@ from ollamapilot.skill_middleware import (
     ToolLoggingMiddleware,
     create_skill_middlewares,
 )
+from ollamapilot.model_context import get_truncation_threshold
 
 
 class OllamaPilotAgent:
@@ -186,6 +187,39 @@ class OllamaPilotAgent:
 
         return middleware
 
+    def _get_tool_truncation_limit(self) -> int:
+        """
+        获取工具输出截断阈值
+        
+        根据当前模型实际使用的 num_ctx 动态计算。
+        确保工具输出不会超出模型上下文限制。
+        
+        Returns:
+            截断阈值（字符数）
+        """
+        try:
+            # 尝试从模型获取名称和 num_ctx
+            model_name = None
+            num_ctx = None
+            
+            if hasattr(self.model, 'model'):
+                model_name = self.model.model
+            elif hasattr(self.model, 'model_name'):
+                model_name = self.model.model_name
+            
+            # 获取实际使用的 num_ctx
+            if hasattr(self.model, 'num_ctx'):
+                num_ctx = self.model.num_ctx
+            
+            if model_name:
+                from ollamapilot.model_context import get_truncation_threshold
+                return get_truncation_threshold(model_name, num_ctx=num_ctx)
+        except Exception:
+            pass
+        
+        # 默认保守值
+        return 2000
+
     def invoke(self, query: str, thread_id: Optional[str] = None) -> str:
         """
         执行用户查询
@@ -284,10 +318,12 @@ class OllamaPilotAgent:
 
                 elif isinstance(msg, ToolMessage):
                     # 截断过长的 ToolMessage 内容，避免模型无法处理
-                    # 限制在 2000 字符以内，保留关键信息
+                    # 根据模型上下文窗口动态调整截断阈值
                     content = msg.content
-                    if len(content) > 2000:
-                        content = content[:2000] + "\n... (内容已截断)"
+                    truncation_limit = self._get_tool_truncation_limit()
+                    if len(content) > truncation_limit:
+                        original_length = len(content)
+                        content = content[:truncation_limit] + f"\n... (内容已截断，原始长度: {original_length} 字符)"
                     tool_results.append(ToolMessage(
                         content=content,
                         tool_call_id=msg.tool_call_id,

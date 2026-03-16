@@ -113,19 +113,21 @@ def init_ollama_model(
     temperature: Optional[float] = None,
     base_url: Optional[str] = None,
     use_config: bool = True,
+    auto_detect_ctx: bool = True,
     **kwargs
 ) -> ChatOllama:
     """
     初始化 Ollama 模型
     
     基于 LangChain 1.0+ 的 ChatOllama，针对小模型优化配置。
-    支持从 .env 配置文件读取默认设置。
+    支持从 .env 配置文件读取默认设置，支持自动检测模型上下文窗口。
     
     Args:
         model: 模型名称（如 "qwen3.5:4b"），默认从配置文件读取
         temperature: 温度参数，默认从配置文件读取
         base_url: Ollama 服务地址，默认从配置文件读取
         use_config: 是否使用配置文件中的设置
+        auto_detect_ctx: 是否自动检测模型上下文窗口（覆盖配置中的 auto 设置）
         **kwargs: 其他参数传递给 ChatOllama
         
     Returns:
@@ -134,6 +136,7 @@ def init_ollama_model(
     Example:
         >>> llm = init_ollama_model()  # 使用配置文件设置
         >>> llm = init_ollama_model("qwen3.5:4b", temperature=0.7)  # 自定义设置
+        >>> llm = init_ollama_model(auto_detect_ctx=True)  # 强制自动检测上下文
         >>> response = llm.invoke("你好")
     """
     # 从配置文件获取默认值
@@ -141,14 +144,29 @@ def init_ollama_model(
         model = model or config.chat_model
         temperature = temperature if temperature is not None else config.chat_temperature
         base_url = base_url or config.ollama_base_url
-        num_ctx = kwargs.pop('num_ctx', config.chat_num_ctx)
+        num_ctx = kwargs.pop('num_ctx', None)  # 先设为 None，后面处理
         num_predict = kwargs.pop('num_predict', config.chat_num_predict)
     else:
         model = model or "qwen3.5:4b"
         temperature = temperature if temperature is not None else 0.7
         base_url = base_url or "http://localhost:11434"
-        num_ctx = kwargs.pop('num_ctx', 8192)
+        num_ctx = kwargs.pop('num_ctx', None)
         num_predict = kwargs.pop('num_predict', 2048)
+    
+    # 处理 num_ctx：如果未指定且启用自动检测，则自动获取
+    if num_ctx is None:
+        if auto_detect_ctx:
+            try:
+                from ollamapilot.model_context import get_recommended_num_ctx
+                num_ctx = get_recommended_num_ctx(model, base_url)
+                if config.verbose:
+                    print(f"🔧 自动检测上下文窗口: {model} -> {num_ctx}")
+            except Exception as e:
+                if config.verbose:
+                    print(f"⚠️ 自动检测失败，使用默认值: {e}")
+                num_ctx = 8192
+        else:
+            num_ctx = config.chat_num_ctx if use_config else 8192
     
     return ChatOllama(
         model=model,

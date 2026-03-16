@@ -137,6 +137,25 @@ class Config:
     
     @property
     def chat_num_ctx(self) -> int:
+        """
+        获取上下文窗口大小
+        
+        支持以下配置值：
+        - 具体数字：如 8192, 32768
+        - 'auto'：自动检测模型能力
+        
+        当配置为 'auto' 时，会根据当前模型自动获取最优的上下文窗口大小。
+        """
+        value = self.get('CHAT_NUM_CTX', '8192')
+        
+        # 支持 'auto' 模式
+        if value and value.lower() == 'auto':
+            try:
+                from ollamapilot.model_context import get_recommended_num_ctx
+                return get_recommended_num_ctx(self.chat_model)
+            except Exception:
+                return 8192  # fallback
+        
         return self.get_int('CHAT_NUM_CTX', 8192)
     
     @property
