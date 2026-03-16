@@ -105,7 +105,12 @@ def upload_document(
 
         # 读取文档
         print(f"📖 正在读取文档: {Path(file_path).name}")
-        processor = DocumentProcessor()
+        # 根据当前 embedding 模型动态选择分块大小
+        try:
+            embedding_model = _graph_service.embedding_model if _graph_service else None
+            processor = DocumentProcessor.from_model_name(embedding_model) if embedding_model else DocumentProcessor()
+        except Exception:
+            processor = DocumentProcessor()
         text = processor.read_document(file_path)
 
         if not text:
@@ -222,8 +227,12 @@ def add_text(
         return "❌ 服务未初始化"
 
     try:
-        # 分块
-        processor = DocumentProcessor()
+        # 分块（根据当前 embedding 模型动态选择分块大小）
+        try:
+            embedding_model = _graph_service.embedding_model if _graph_service else None
+            processor = DocumentProcessor.from_model_name(embedding_model) if embedding_model else DocumentProcessor()
+        except Exception:
+            processor = DocumentProcessor()
         chunks = processor.chunk_text(text)
 
         # 处理每个块

@@ -316,7 +316,13 @@ class DocumentManager:
             else:
                 logger.info(f"[{doc_info.name}] LLM服务不可用，仅使用词典匹配")
 
-            doc_processor = DocumentProcessor()
+            # 根据 embedding 模型动态选择分块大小
+            try:
+                doc_processor = DocumentProcessor.from_model_name(doc_info.model_name)
+                logger.info(f"[{doc_info.name}] 分块大小: {doc_processor.chunk_size:,} 字符 (基于 {doc_info.model_name})")
+            except Exception as e:
+                logger.warning(f"[{doc_info.name}] 动态分块失败，使用默认: {e}")
+                doc_processor = DocumentProcessor()
 
             progress_callback(0.15, "读取文档...")
 

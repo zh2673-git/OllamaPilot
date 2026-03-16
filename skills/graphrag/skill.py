@@ -145,7 +145,11 @@ class GraphRAGSkill(Skill):
             # 初始化LLM客户端
             self.llm_client = SimpleLLMClient()
             self.use_llm = self.llm_client.is_available()
-            self.document_processor = DocumentProcessor()
+            # 根据 embedding 模型动态选择分块大小
+            try:
+                self.document_processor = DocumentProcessor.from_model_name(self.embedding_model)
+            except Exception:
+                self.document_processor = DocumentProcessor()
 
             # 创建 DocumentManager 实例（用于管理所有文档）
             from skills.graphrag.document_manager import DocumentManager
