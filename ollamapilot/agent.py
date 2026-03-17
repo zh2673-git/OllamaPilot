@@ -3,8 +3,14 @@ Agent 核心模块 V2 - 基于 LangChain create_agent
 
 使用 LangChain 原生 create_agent 和 AgentMiddleware 实现。
 保持所有现有功能，代码更简洁。
+
+新增 Context 总纲架构支持：
+- ContextBuilder: 构建三层 Context（实时层、工作层、知识层）
+- SystemMemory: 跨会话长期记忆（可选）
+- TokenOptimizer: Token 预算优化
 """
 
+import asyncio
 from typing import List, Optional, Dict, Any
 from langchain.agents import create_agent as lc_create_agent
 from langchain.agents.middleware import (
@@ -26,7 +32,37 @@ from ollamapilot.skill_middleware import (
     ToolLoggingMiddleware,
     create_skill_middlewares,
 )
-from ollamapilot.model_context import get_truncation_threshold
+from ollamapilot.model_context import get_truncation_threshold, get_recommended_num_ctx
+from ollamapilot.context.builder import ContextBuilder
+from ollamapilot.memory.system_memory import SystemMemory
+
+
+def _detect_model_name(model: BaseChatModel) -> Optional[str]:
+    """
+    从模型实例中检测模型名称
+    
+    Args:
+        model: LangChain 模型实例
+        
+    Returns:
+        模型名称或 None
+    """
+    # 尝试不同的属性获取模型名称
+    for attr in ['model', 'model_name', 'deployment_name']:
+        if hasattr(model, attr):
+            value = getattr(model, attr)
+            if value:
+                return str(value)
+    
+    # 尝试从 model_kwargs 获取
+    if hasattr(model, 'model_kwargs'):
+        kwargs = getattr(model, 'model_kwargs', {})
+        if isinstance(kwargs, dict):
+            for key in ['model', 'model_name']:
+                if key in kwargs:
+                    return str(kwargs[key])
+    
+    return None
 
 
 class OllamaPilotAgent:
@@ -60,7 +96,14 @@ class OllamaPilotAgent:
         verbose: bool = True,
         checkpointer=None,
         tools: Optional[List[BaseTool]] = None,  # 兼容参数，实际使用内置工具
-        embedding_model: Optional[str] = None,  # Embedding 模型名称
+        embedding_model: Optional[str] = None,  # Embedding 模型名称（用于 GraphRAG Skill）
+        enable_system_memory: bool = True,  # 是否启用系统记忆（默认启用）
+        system_memory_dir: str = "./data/memories",  # 系统记忆存储目录
+        memory_embedding_model: Optional[Any] = None,  # 用于向量检索的嵌入模型
+        max_context_tokens: Optional[int] = None,  # 最大 Context token 数（None 则自动检测）
+        auto_detect_context: bool = True,  # 是否自动检测模型上下文大小
+        memory_storage: str = "sqlite",  # 对话记忆存储方式: "sqlite" 或 "memory"
+        memory_db_path: str = "./data/sessions/conversations.db",  # SQLite 存储路径
         **kwargs,  # 忽略其他参数，保持向后兼容
     ):
         """
@@ -69,14 +112,43 @@ class OllamaPilotAgent:
         Args:
             model: 聊天模型实例
             skills_dir: Skill 目录路径
-            enable_memory: 是否启用对话记忆
+            enable_memory: 是否启用对话记忆（Checkpoint）
             max_tool_calls: 最大工具调用次数
             verbose: 是否显示详细执行过程
             checkpointer: 自定义 checkpointer
             embedding_model: Embedding 模型名称（传递给 GraphRAG Skill）
+            enable_system_memory: 是否启用系统记忆（跨会话长期记忆）
+            system_memory_dir: 系统记忆存储目录
+            memory_embedding_model: 用于向量检索的嵌入模型（可选）
+            max_context_tokens: 最大 Context token 数（None 则根据模型自动检测）
+            auto_detect_context: 是否自动检测模型上下文大小
+            memory_storage: 对话记忆存储方式: "sqlite" (持久化) 或 "memory" (内存)
+            memory_db_path: SQLite 数据库路径（当 memory_storage="sqlite" 时有效）
         """
         self.model = model
         self.verbose = verbose
+
+        # 动态检测模型上下文大小
+        detected_tokens = None
+        if auto_detect_context and max_context_tokens is None:
+            model_name = _detect_model_name(model)
+            if model_name:
+                try:
+                    detected_tokens = get_recommended_num_ctx(model_name)
+                    if verbose:
+                        print(f"🎯 自动检测模型上下文: {model_name} -> {detected_tokens:,} tokens")
+                except Exception as e:
+                    if verbose:
+                        print(f"⚠️  上下文检测失败: {e}，使用默认值 8192")
+                    detected_tokens = 8192
+            else:
+                if verbose:
+                    print(f"⚠️  无法检测模型名称，使用默认上下文 8192 tokens")
+                detected_tokens = 8192
+        
+        # 使用检测值或用户指定值
+        final_max_tokens = max_context_tokens if max_context_tokens is not None else (detected_tokens or 8192)
+        self.max_context_tokens = final_max_tokens
 
         # 构建 Skill 配置
         skill_config = {}
@@ -94,23 +166,76 @@ class OllamaPilotAgent:
         # 收集所有工具（内置 + Skill）
         self.all_tools = self._get_all_tools()
 
-        # 配置 Checkpointer
+        # 配置 Checkpointer（对话记忆存储）
         if checkpointer:
             self.checkpointer = checkpointer
         elif enable_memory:
-            self.checkpointer = MemorySaver()
+            if memory_storage == "sqlite":
+                # 使用 SQLite 持久化存储（异步版本，支持流式输出）
+                import os
+                os.makedirs(os.path.dirname(memory_db_path), exist_ok=True)
+                # 使用 AsyncSqliteSaver 支持异步方法（流式输出需要）
+                try:
+                    import asyncio
+                    import aiosqlite
+                    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+                    
+                    # 创建异步初始化函数
+                    async def _init_sqlite():
+                        saver = AsyncSqliteSaver(conn=await aiosqlite.connect(memory_db_path))
+                        # 初始化表结构
+                        await saver.setup()
+                        return saver
+                    
+                    # 在同步代码中异步初始化，但要保留事件循环供后续使用
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    self.checkpointer = loop.run_until_complete(_init_sqlite())
+                    # 不关闭事件循环，因为后续流式输出需要它
+                    
+                    if verbose:
+                        print(f"💾 对话记忆已启用 (SQLite): {memory_db_path}")
+                except Exception as e:
+                    # 如果初始化失败，回退到内存存储
+                    self.checkpointer = MemorySaver()
+                    if verbose:
+                        print(f"⚠️  SQLite 初始化失败，使用内存模式: {e}")
+            else:
+                # 使用内存存储（程序重启后丢失）
+                self.checkpointer = MemorySaver()
+                if verbose:
+                    print(f"💾 对话记忆已启用 (内存模式)")
         else:
             self.checkpointer = None
 
         # 保存最大工具调用次数（用于设置 recursion_limit）
         self.max_tool_calls = max_tool_calls
 
+        # 初始化系统记忆
+        self.system_memory = None
+        if enable_system_memory:
+            # 使用统一版系统记忆（默认启用向量检索）
+            self.system_memory = SystemMemory(
+                storage_dir=system_memory_dir,
+                embedding_model=memory_embedding_model,
+                verbose=verbose,
+            )
+            if verbose:
+                print(f"🧠 系统记忆已启用")
+
+        self.context_builder = ContextBuilder(
+            max_tokens=final_max_tokens,
+            enable_system_memory=enable_system_memory,
+            system_memory=self.system_memory,
+        )
+
         # 构建中间件列表
         middleware = self._build_middleware(max_tool_calls)
 
         # 打印启动摘要
         if self.verbose:
-            print(f"📦 已加载 {skill_count} 个 Skill | 🔧 {len(self.all_tools)} 个工具 | 🔒 工具过滤已启用")
+            memory_status = " | 🧠 系统记忆已启用" if enable_system_memory else ""
+            print(f"📦 已加载 {skill_count} 个 Skill | 🔧 {len(self.all_tools)} 个工具 | 🔒 工具过滤已启用{memory_status}")
 
         # 创建 Agent（使用 LangChain 原生 create_agent）
         self.agent = lc_create_agent(
@@ -220,6 +345,36 @@ class OllamaPilotAgent:
         # 默认保守值
         return 2000
 
+    def _build_context(self, query: str, thread_id: Optional[str] = None):
+        """
+        构建 Context（用于调试和分析）
+
+        Args:
+            query: 用户查询
+            thread_id: 对话线程 ID
+
+        Returns:
+            Context 对象
+        """
+        # 获取当前激活的 Skill
+        skill = self._select_skill_for_query(query)
+        if not skill:
+            from ollamapilot.skills.default_skill import DefaultSkill
+            skill = DefaultSkill()
+
+        # 获取对话历史
+        history = self.get_history(thread_id) if thread_id else []
+
+        # 构建 Context
+        context = self.context_builder.build(
+            query=query,
+            skill=skill,
+            history=history,
+            thread_id=thread_id,
+        )
+
+        return context
+
     def invoke(self, query: str, thread_id: Optional[str] = None) -> str:
         """
         执行用户查询
@@ -234,19 +389,58 @@ class OllamaPilotAgent:
         if self.verbose:
             print(f"🤖 用户: {query}")
 
-        # 配置（包含 recursion_limit 以防止 LangGraph 默认限制）
+        # 1. 选择 Skill
+        skill = self._select_skill_for_query(query)
+
+        # 记录 Skill 使用（用于系统记忆）
+        if skill and self.system_memory:
+            self.system_memory.record_skill_usage(skill.name, context=query[:100])
+
+        # 2. 获取对话历史
+        history = self.get_history(thread_id) if thread_id else []
+
+        # 3. 使用 ContextBuilder 构建完整上下文（三层架构）
+        context = self.context_builder.build(
+            query=query,
+            skill=skill,
+            history=history,
+            thread_id=thread_id,
+        )
+
+        # 4. 将 Context 转换为系统提示词
+        system_prompt = self._context_to_prompt(context)
+
+        if self.verbose and self.system_memory:
+            # 检查知识层是否有记忆
+            from ollamapilot.context.types import Layer
+            knowledge = context.get_layer(Layer.KNOWLEDGE)
+            if knowledge and knowledge.memories:
+                print(f"🧠 已加载 {len(knowledge.memories)} 条系统记忆")
+
+        # 5. 配置（包含 recursion_limit 以防止 LangGraph 默认限制）
         config = {
             "configurable": {"thread_id": thread_id or "default"},
             "recursion_limit": self.max_tool_calls + 10  # 给一些余量
         }
 
-        # 执行
+        # 6. 构建消息列表
+        messages = []
+
+        # 添加系统提示词（来自 ContextBuilder）
+        if system_prompt:
+            from langchain_core.messages import SystemMessage
+            messages.append(SystemMessage(content=system_prompt))
+
+        # 添加用户查询
+        messages.append(HumanMessage(content=query))
+
+        # 7. 执行
         result = self.agent.invoke(
-            {"messages": [HumanMessage(content=query)]},
+            {"messages": messages},
             config
         )
 
-        # 提取回复
+        # 8. 提取回复
         messages = result.get("messages", [])
         response = ""
         has_tool_calls = False
@@ -272,7 +466,262 @@ class OllamaPilotAgent:
         if self.verbose and response:
             print(f"🤖 AI: {response[:200]}{'...' if len(response) > 200 else ''}")
 
+        # 9. 自动提取和保存重要信息到系统记忆
+        if self.system_memory:
+            self._extract_and_save_memory(query, response)
+
         return response
+
+    async def ainvoke(self, query: str, thread_id: Optional[str] = None) -> str:
+        """
+        异步执行用户查询
+        
+        在事件循环中运行同步的 invoke 方法
+        
+        Args:
+            query: 用户输入
+            thread_id: 对话线程 ID（用于持久化记忆）
+            
+        Returns:
+            模型回复
+        """
+        # 使用 to_thread 在单独的线程中运行同步代码
+        import asyncio
+        return await asyncio.to_thread(self.invoke, query, thread_id)
+
+    def _context_to_prompt(self, context) -> str:
+        """
+        将 Context 转换为系统提示词
+
+        Args:
+            context: Context 对象
+
+        Returns:
+            系统提示词
+        """
+        if not context or not context.parts:
+            return ""
+
+        parts = []
+
+        # 添加系统指令
+        parts.append("你是一个智能助手，请根据以下上下文信息回答用户问题。")
+
+        # 添加各层 Context
+        context_text = context.to_text()
+        if context_text:
+            parts.append(context_text)
+
+        # 添加回复要求
+        parts.append("请基于以上信息，为用户提供准确、有用的回答。")
+
+        return "\n\n".join(parts)
+
+    def _extract_and_save_memory(self, query: str, response: str):
+        """
+        从对话中提取重要信息并保存到系统记忆
+        使用轻量级LLM分析，无需硬编码规则
+
+        Args:
+            query: 用户查询
+            response: AI回复
+        """
+        if not self.system_memory:
+            return
+
+        try:
+            # 使用轻量级规则快速提取（避免每次调用LLM）
+            # 只提取最明确的信息模式
+            import re
+
+            # 1. 提取姓名（最明确的模式）
+            name_match = re.search(r'我叫\s*([^，。！？\n]{2,20})(?=[，。！？\n]|$)', query)
+            if name_match:
+                name = name_match.group(1).strip()
+                if name and len(name) >= 2:
+                    self._save_memory_if_new(f"用户姓名是{name}", "identity", 0.95)
+
+            # 2. 使用LLM进行智能提取（异步，不阻塞回复）
+            # 只在查询包含潜在重要信息时触发
+            if self._should_extract_with_llm(query):
+                self._extract_with_llm_async(query, response)
+
+        except Exception as e:
+            if self.verbose:
+                print(f"⚠️ 提取记忆时出错: {e}")
+
+    def _save_memory_if_new(self, fact: str, category: str, importance: float):
+        """保存记忆（如果之前没有保存过相同内容）"""
+        try:
+            # 检查是否已存在相似记忆（使用语义检索）
+            existing = self.system_memory.recall(fact, top_k=5)
+
+            # 提取关键信息用于比较（如姓名、兴趣爱好）
+            fact_normalized = self._normalize_fact(fact)
+
+            for mem in existing:
+                mem_normalized = self._normalize_fact(mem)
+
+                # 检查是否是同一类信息（如都是姓名）
+                if self._is_same_fact_type(fact_normalized, mem_normalized):
+                    # 如果内容相似度很高，不重复保存
+                    similarity = self._calculate_similarity(fact_normalized, mem_normalized)
+                    if similarity > 0.7:  # 相似度阈值
+                        if self.verbose:
+                            print(f"   [Memory] 相似记忆已存在，跳过: {fact[:50]}...")
+                        return
+
+            self.system_memory.remember_fact(fact, category=category, importance=importance)
+            if self.verbose:
+                print(f"💾 已保存记忆: {fact[:50]}...")
+        except Exception as e:
+            if self.verbose:
+                print(f"   [Memory] 保存记忆时出错: {e}")
+
+    def _normalize_fact(self, fact: str) -> str:
+        """标准化事实文本，用于比较"""
+        import re
+
+        # 移除常见前缀
+        prefixes = ['用户', '姓名', '名字', '是', '：', ':', ' ']
+        normalized = fact.strip()
+        for prefix in prefixes:
+            normalized = normalized.replace(prefix, '')
+
+        # 转换为小写
+        normalized = normalized.lower()
+
+        # 移除标点
+        normalized = re.sub(r'[^\w\u4e00-\u9fff]', '', normalized)
+
+        return normalized
+
+    def _is_same_fact_type(self, fact1: str, fact2: str) -> bool:
+        """判断两个事实是否是同一类型（如都是姓名）"""
+        # 检查是否包含相同的实体类型关键词
+        identity_keywords = ['姓名', '名字', '叫', '我是']
+        preference_keywords = ['喜欢', '爱好', '兴趣']
+
+        # 检查是否是身份信息
+        is_identity1 = any(kw in fact1 for kw in identity_keywords)
+        is_identity2 = any(kw in fact2 for kw in identity_keywords)
+        if is_identity1 and is_identity2:
+            return True
+
+        # 检查是否是偏好信息
+        is_pref1 = any(kw in fact1 for kw in preference_keywords)
+        is_pref2 = any(kw in fact2 for kw in preference_keywords)
+        if is_pref1 and is_pref2:
+            return True
+
+        # 检查是否有大量字符重叠
+        common_chars = set(fact1) & set(fact2)
+        if len(common_chars) >= min(len(fact1), len(fact2)) * 0.5:
+            return True
+
+        return False
+
+    def _calculate_similarity(self, s1: str, s2: str) -> float:
+        """计算两个字符串的相似度 (0-1)"""
+        if not s1 or not s2:
+            return 0.0
+
+        # 使用 Jaccard 相似度
+        set1 = set(s1)
+        set2 = set(s2)
+
+        intersection = len(set1 & set2)
+        union = len(set1 | set2)
+
+        if union == 0:
+            return 0.0
+
+        return intersection / union
+
+    def _should_extract_with_llm(self, query: str) -> bool:
+        """
+        判断是否需要使用LLM提取记忆
+        基于关键词启发式判断
+        """
+        # 包含潜在重要信息的关键词
+        keywords = [
+            '喜欢', '爱好', '兴趣', '讨厌', '不喜欢',
+            '我是', '我是做', '我的工作', '我的职业',
+            '项目', '产品', '公司', '团队',
+            '目标', '计划', '梦想', '愿望',
+            '地址', '城市', '住在', '来自',
+            '年龄', '生日', '出生',
+            '学历', '学校', '专业',
+            '联系方式', '邮箱', '电话',
+        ]
+
+        query_lower = query.lower()
+        return any(kw in query_lower for kw in keywords)
+
+    def _extract_with_llm_async(self, query: str, response: str):
+        """
+        使用LLM异步提取记忆（不阻塞主流程）
+        """
+        import threading
+
+        def extract():
+            try:
+                # 构建提取提示词
+                extract_prompt = f"""分析以下对话，提取关于用户的重要事实信息。
+
+用户说: {query}
+
+请提取以下类型的信息（如果有）：
+1. 身份信息（姓名、职业、身份等）
+2. 偏好信息（喜欢什么、讨厌什么、兴趣爱好等）
+3. 背景信息（所在地、公司、项目等）
+4. 目标信息（计划、目标、愿望等）
+
+只返回提取到的事实，每行一个，格式为：
+- [类别] 具体事实
+
+如果没有重要信息，返回"无"。
+"""
+
+                # 使用简单模型进行提取
+                from langchain_core.messages import HumanMessage
+                result = self.model.invoke([HumanMessage(content=extract_prompt)])
+
+                if result and result.content:
+                    content = result.content.strip()
+                    if content and content != '无':
+                        # 解析提取结果
+                        for line in content.split('\n'):
+                            line = line.strip()
+                            if line.startswith('-') or line.startswith('•'):
+                                # 提取类别和事实
+                                fact_text = line.lstrip('- •').strip()
+                                if ']' in fact_text:
+                                    category_part, fact = fact_text.split(']', 1)
+                                    category = category_part.strip('[').lower()
+                                    fact = fact.strip()
+
+                                    # 映射到标准类别
+                                    category_map = {
+                                        '身份': 'identity',
+                                        '职业': 'identity',
+                                        '偏好': 'preference',
+                                        '兴趣': 'preference',
+                                        '背景': 'background',
+                                        '目标': 'goal',
+                                    }
+                                    std_category = category_map.get(category, 'general')
+
+                                    # 保存记忆
+                                    self._save_memory_if_new(fact, std_category, 0.8)
+
+            except Exception as e:
+                if self.verbose:
+                    print(f"⚠️ LLM提取记忆失败: {e}")
+
+        # 在后台线程中执行提取
+        thread = threading.Thread(target=extract, daemon=True)
+        thread.start()
 
     def _force_response(self, messages: List[Any], config: Dict[str, Any]) -> str:
         """
@@ -432,6 +881,9 @@ class OllamaPilotAgent:
             "recursion_limit": self.max_tool_calls + 10  # 给一些余量
         }
 
+        # 收集完整的 AI 回复用于记忆提取
+        full_response = ""
+
         # 只传入当前用户消息，历史消息由 checkpointer 自动管理
         # LangChain Agent 会自动从 checkpointer 加载历史消息并合并
         async for event in self.agent.astream_events(
@@ -439,7 +891,20 @@ class OllamaPilotAgent:
             config,
             version="v1"
         ):
+            # 收集 AI 回复内容
+            if event.get("event") == "on_chat_model_stream":
+                data = event.get("data", {})
+                chunk = data.get("chunk", None)
+                if chunk and hasattr(chunk, "content"):
+                    content = chunk.content
+                    if content:
+                        full_response += content
+
             yield event
+
+        # 对话结束后，自动提取和保存重要信息到系统记忆
+        if self.system_memory:
+            self._extract_and_save_memory(query, full_response)
 
     def get_history(self, thread_id: Optional[str] = None) -> List[Any]:
         """
@@ -572,12 +1037,17 @@ def create_ollama_agent(
     enable_memory: bool = True,
     max_tool_calls: Optional[int] = None,
     verbose: bool = True,
+    max_context_tokens: Optional[int] = None,
+    auto_detect_context: bool = True,
+    enable_system_memory: bool = True,
+    system_memory_dir: str = "./data/memories",
     **kwargs
 ) -> OllamaPilotAgent:
     """
     创建 OllamaPilot Agent
 
     工厂函数，快速创建 Agent 实例。
+    支持自动检测模型上下文大小，根据模型能力和硬件配置动态调整。
 
     Args:
         model: 聊天模型实例
@@ -585,6 +1055,10 @@ def create_ollama_agent(
         enable_memory: 是否启用对话记忆
         max_tool_calls: 最大工具调用次数，默认从配置文件读取 RECURSION_LIMIT
         verbose: 是否显示详细执行过程
+        max_context_tokens: 最大 Context token 数（None 则自动检测）
+        auto_detect_context: 是否自动检测模型上下文大小
+        enable_system_memory: 是否启用系统记忆（跨会话长期记忆）
+        system_memory_dir: 系统记忆存储目录
         **kwargs: 其他参数传递给 OllamaPilotAgent
 
     Returns:
@@ -596,6 +1070,12 @@ def create_ollama_agent(
         >>> model = init_ollama_model("qwen3.5:4b")
         >>> agent = create_ollama_agent(model, skills_dir="skills")
         >>> response = agent.invoke("明天苏州天气怎么样？")
+        
+        >>> # 手动指定上下文大小
+        >>> agent = create_ollama_agent(model, skills_dir="skills", max_context_tokens=32768)
+        
+        >>> # 禁用自动检测
+        >>> agent = create_ollama_agent(model, skills_dir="skills", auto_detect_context=False)
     """
     # 如果未指定 max_tool_calls，从配置文件读取
     if max_tool_calls is None:
@@ -609,6 +1089,10 @@ def create_ollama_agent(
         enable_memory=enable_memory,
         max_tool_calls=max_tool_calls,
         verbose=verbose,
+        max_context_tokens=max_context_tokens,
+        auto_detect_context=auto_detect_context,
+        enable_system_memory=enable_system_memory,
+        system_memory_dir=system_memory_dir,
         **kwargs
     )
 

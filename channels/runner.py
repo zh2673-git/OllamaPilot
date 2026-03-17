@@ -14,6 +14,7 @@ Channels 运行器
 
 import argparse
 import asyncio
+import concurrent.futures
 import logging
 import signal
 import sys
@@ -73,6 +74,13 @@ class ChannelRunner:
         
         self.config = self._load_config(config_path)
         
+        # 创建线程池执行器（用于同步 agent 调用）
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+        
+        # 初始化渠道会话管理器
+        from .session_manager import get_session_manager
+        self.session_manager = get_session_manager("./data/channel_sessions")
+        
         self._setup_logging()
         
         self._init_agent()
@@ -116,34 +124,83 @@ class ChannelRunner:
         return config
     
     def _init_agent(self):
-        """初始化 OllamaPilot Agent"""
+        """初始化 OllamaPilot Agent（Channels 使用用户级 SQLite 持久化）"""
         try:
             from ollamapilot import init_ollama_model, OllamaPilotAgent
-            
+
             agent_config = self.config.get("agent", {})
             model_name = agent_config.get("model", "qwen3.5:4b")
             skills_dir = agent_config.get("skills_dir", "./skills")
             verbose = agent_config.get("verbose", True)
-            
+
             logger.info(f"🤖 正在初始化 Agent...")
             logger.info(f"   模型: {model_name}")
             logger.info(f"   Skills 目录: {skills_dir}")
-            
+            logger.info(f"   记忆模式: 用户级 SQLite 持久化（Channels 专用）")
+
             model = init_ollama_model(model_name)
-            self.agent = OllamaPilotAgent(
-                model=model,
-                skills_dir=skills_dir,
-                verbose=verbose
-            )
-            
-            logger.info("✅ Agent 初始化完成")
-            
+            # 不在这里创建 agent，改为每次消息时创建（使用用户特定的 checkpointer）
+            self.model = model
+            self.agent_config = {
+                "skills_dir": skills_dir,
+                "verbose": verbose
+            }
+
+            logger.info("✅ Agent 模板初始化完成（每个用户独立）")
+
         except ImportError as e:
             logger.error(f"❌ 导入 OllamaPilot 失败: {e}")
             raise
         except Exception as e:
             logger.error(f"❌ 初始化 Agent 失败: {e}")
             raise
+
+    def _get_or_create_user_agent(self, channel: str, user_id: str) -> Any:
+        """
+        获取或创建用户专属的 Agent（带缓存）
+
+        每个用户有独立的 SQLite 数据库和 checkpointer
+        Agent 实例会被缓存，避免重复加载 Skill
+
+        Args:
+            channel: 渠道名称
+            user_id: 用户 ID
+
+        Returns:
+            OllamaPilotAgent 实例
+        """
+        from ollamapilot import OllamaPilotAgent
+
+        # 构建缓存键
+        cache_key = f"{channel}:{user_id}"
+
+        # 检查缓存
+        if hasattr(self, '_user_agents') and cache_key in self._user_agents:
+            return self._user_agents[cache_key]
+
+        # 初始化缓存字典
+        if not hasattr(self, '_user_agents'):
+            self._user_agents = {}
+
+        # 获取用户的 checkpointer
+        checkpointer = self.session_manager.get_checkpointer(channel, user_id)
+
+        logger.info(f"🤖 为用户 {user_id} 创建新的 Agent 实例...")
+
+        # 创建用户专属的 Agent
+        agent = OllamaPilotAgent(
+            model=self.model,
+            skills_dir=self.agent_config["skills_dir"],
+            verbose=self.agent_config["verbose"],
+            enable_memory=True,
+            checkpointer=checkpointer  # 使用用户的持久化 checkpointer
+        )
+
+        # 缓存起来
+        self._user_agents[cache_key] = agent
+        logger.info(f"✅ 用户 {user_id} 的 Agent 已创建并缓存")
+
+        return agent
     
     def _init_channels(self):
         """初始化所有启用的渠道"""
@@ -208,26 +265,49 @@ class ChannelRunner:
             logger.error(f"处理消息失败 [{channel_name}] (user={message.user_id}): {e}", exc_info=True)
             return ChannelResponse(content=f"❌ 处理出错: {str(e)[:100]}")
     
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError, ConnectionError)),
-        before_sleep=lambda retry_state: logger.warning(
-            f"第 {retry_state.attempt_number} 次重试..."
-        )
-    )
     async def _invoke_with_retry(self, message: ChannelMessage) -> str:
-        """调用 Agent（带重试机制）"""
+        """调用 Agent（使用线程池执行器，每个用户独立）"""
         thread_id = f"{message.channel_name}_{message.user_id}_{message.message_type}"
-        
-        if hasattr(self.agent, 'ainvoke'):
-            return await self.agent.ainvoke(query=message.content, thread_id=thread_id)
-        else:
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(
-                None,
-                lambda: self.agent.invoke(query=message.content, thread_id=thread_id)
-            )
+
+        logger.info(f"🤖 开始调用 Agent，thread_id={thread_id}")
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"🤖 使用线程池执行器调用 agent.invoke...")
+                # 使用线程池执行器在单独线程中运行同步代码
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(
+                    self._executor,
+                    self._sync_invoke,
+                    message  # 传入完整消息对象
+                )
+                logger.info(f"✅ Agent 调用完成，结果长度={len(result) if result else 0}")
+
+                # 更新会话活动记录
+                self.session_manager.update_session_activity(
+                    message.channel_name,
+                    message.user_id,
+                    message_count=1
+                )
+
+                return result
+            except (aiohttp.ClientError, asyncio.TimeoutError, ConnectionError) as e:
+                logger.warning(f"⚠️ 调用失败: {e}")
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt
+                    logger.warning(f"第 {attempt + 1} 次重试，等待 {wait_time} 秒...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    raise
+
+    def _sync_invoke(self, message: ChannelMessage) -> str:
+        """同步调用 agent（在线程池中运行，每个用户独立）"""
+        # 获取或创建用户专属的 Agent（带缓存）
+        agent = self._get_or_create_user_agent(message.channel_name, message.user_id)
+
+        thread_id = f"{message.channel_name}_{message.user_id}_{message.message_type}"
+        return agent.invoke(query=message.content, thread_id=thread_id)
     
     def _record_response_time(self, duration: float):
         """记录响应时间"""

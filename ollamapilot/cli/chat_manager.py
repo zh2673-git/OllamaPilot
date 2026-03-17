@@ -30,6 +30,7 @@ from ollamapilot.agent import OllamaPilotAgent
 from ollamapilot.config import get_config, reload_config
 
 from .session import Session
+from .session_store import SessionStore
 from .completer import CommandCompleter, HAS_READLINE
 
 
@@ -59,8 +60,14 @@ class OllamaPilotChat:
         self.current_session_id: str = "default"
         self.session_counter = 0
         
+        # 会话存储管理器
+        self.session_store = SessionStore("./data/sessions/conversations.db")
+        
         # 初始化默认会话
         self._create_session("default", "默认会话")
+        
+        # 从数据库恢复会话
+        self._restore_sessions_from_db()
         
         # 文档管理器
         self.doc_manager = None
@@ -69,7 +76,7 @@ class OllamaPilotChat:
         self.completer = CommandCompleter()
         self._setup_autocomplete()
     
-    def _create_session(self, session_id: str, name: str) -> Session:
+    def _create_session(self, session_id: str, name: str, source: str = "memory") -> Session:
         """创建新会话"""
         session = Session(
             session_id=session_id,
@@ -77,8 +84,37 @@ class OllamaPilotChat:
             model_name=self.current_model_name or "未配置",
             embedding_model=self.current_embedding_model
         )
+        session.source = source
         self.sessions[session_id] = session
         return session
+    
+    def _restore_sessions_from_db(self):
+        """从数据库恢复会话列表"""
+        try:
+            restored_sessions = self.session_store.restore_sessions(
+                model_name=self.current_model_name or "unknown",
+                embedding_model=self.current_embedding_model
+            )
+            
+            if restored_sessions:
+                # 合并恢复的会话（不覆盖内存中的默认会话）
+                for session_id, session in restored_sessions.items():
+                    if session_id not in self.sessions:
+                        self.sessions[session_id] = session
+                        # 更新会话计数器
+                        if session_id.startswith("session_"):
+                            try:
+                                num = int(session_id.split("_")[1])
+                                self.session_counter = max(self.session_counter, num)
+                            except:
+                                pass
+                
+                db_count = len([s for s in restored_sessions.values() if s.is_from_database])
+                if db_count > 0:
+                    print(f"📦 已从数据库恢复 {db_count} 个历史会话")
+                    
+        except Exception as e:
+            print(f"⚠️  恢复会话失败: {e}")
     
     def _setup_autocomplete(self):
         """设置命令自动补全"""
@@ -515,20 +551,156 @@ class OllamaPilotChat:
             print("\n📭 没有会话")
             return
         
+        # 获取统计信息
+        stats = self.session_store.get_session_stats()
+        
         print("\n" + "=" * 70)
         print("📋 会话列表")
+        if stats["total_sessions"] > 0:
+            print(f"   数据库: {stats['total_sessions']} 个会话, {stats['total_messages']} 条消息, {stats['db_size_mb']} MB")
         print("=" * 70)
         
-        for session_id, session in self.sessions.items():
+        # 按更新时间排序
+        sorted_sessions = sorted(
+            self.sessions.items(),
+            key=lambda x: x[1].updated_at,
+            reverse=True
+        )
+        
+        for session_id, session in sorted_sessions:
             marker = "👉" if session_id == self.current_session_id else "  "
-            print(f"{marker} {session.name}")
+            source_icon = "📦" if session.is_from_database else "💾"
+            print(f"{marker} {source_icon} {session.name}")
             print(f"   ID: {session_id}")
             print(f"   模型: {session.model_name}")
             if session.embedding_model:
                 print(f"   Embedding: {session.embedding_model}")
             print(f"   消息数: {session.message_count}")
             print(f"   更新时间: {session.updated_at.strftime('%Y-%m-%d %H:%M:%S')}")
+            if session.description:
+                print(f"   描述: {session.description}")
             print("-" * 70)
+    
+    def show_session_history(self, session_id: Optional[str] = None, limit: int = 20):
+        """显示会话历史"""
+        if session_id is None:
+            session_id = self.current_session_id
+        
+        # 查找会话
+        matching_sessions = [sid for sid in self.sessions if sid.startswith(session_id)]
+        if len(matching_sessions) == 1:
+            session_id = matching_sessions[0]
+        elif len(matching_sessions) > 1:
+            print(f"⚠️ 找到多个匹配的会话，请输入更完整的ID")
+            return
+        
+        if session_id not in self.sessions:
+            print(f"❌ 会话不存在: {session_id}")
+            return
+        
+        session = self.sessions[session_id]
+        print(f"\n📜 会话历史: {session.name}")
+        print(f"   ID: {session_id}")
+        print("=" * 70)
+        
+        # 从数据库获取历史
+        messages = self.session_store.get_session_history(session_id, limit=limit)
+        
+        if not messages:
+            print("   (暂无消息)")
+        else:
+            for i, msg in enumerate(messages, 1):
+                msg_type = msg.get("type", "")
+                content = msg.get("content", "")
+                
+                if msg_type == "human":
+                    print(f"\n{i}. 👤 用户: {content}")
+                elif msg_type == "ai":
+                    print(f"   🤖 助手: {content[:150]}..." if len(content) > 150 else f"   🤖 助手: {content}")
+                elif msg_type == "system":
+                    print(f"   ⚙️  [系统消息]")
+        
+        print(f"\n   共显示 {len(messages)} 条消息")
+    
+    def delete_session(self, session_id: str, confirm: bool = True):
+        """删除会话"""
+        # 查找会话
+        matching_sessions = [sid for sid in self.sessions if sid.startswith(session_id)]
+        if len(matching_sessions) == 1:
+            session_id = matching_sessions[0]
+        elif len(matching_sessions) > 1:
+            print(f"⚠️ 找到多个匹配的会话，请输入更完整的ID")
+            return False
+        
+        if session_id not in self.sessions:
+            print(f"❌ 会话不存在: {session_id}")
+            return False
+        
+        session = self.sessions[session_id]
+        
+        if confirm:
+            print(f"\n⚠️ 确定要删除会话 '{session.name}' 吗？")
+            print(f"   ID: {session_id}")
+            print(f"   消息数: {session.message_count}")
+            print(f"   此操作不可恢复！")
+            response = input("   输入 'yes' 确认删除: ")
+            if response.lower() != 'yes':
+                print("   已取消删除")
+                return False
+        
+        # 从数据库删除
+        if self.session_store.delete_session(session_id):
+            # 从内存删除
+            del self.sessions[session_id]
+            
+            # 如果删除的是当前会话，切换到默认会话
+            if session_id == self.current_session_id:
+                self.current_session_id = "default"
+                print(f"\n✅ 已删除会话并切换到默认会话")
+            else:
+                print(f"\n✅ 已删除会话: {session.name}")
+            
+            return True
+        else:
+            print(f"\n❌ 删除会话失败")
+            return False
+    
+    def rename_session(self, new_name: str):
+        """重命名当前会话"""
+        if self.current_session_id not in self.sessions:
+            print("❌ 当前会话不存在")
+            return
+        
+        session = self.sessions[self.current_session_id]
+        old_name = session.name
+        session.rename(new_name)
+        print(f"✅ 已重命名会话: '{old_name}' -> '{new_name}'")
+    
+    def export_session(self, session_id: Optional[str] = None):
+        """导出会话"""
+        if session_id is None:
+            session_id = self.current_session_id
+        
+        # 查找会话
+        matching_sessions = [sid for sid in self.sessions if sid.startswith(session_id)]
+        if len(matching_sessions) == 1:
+            session_id = matching_sessions[0]
+        elif len(matching_sessions) > 1:
+            print(f"⚠️ 找到多个匹配的会话，请输入更完整的ID")
+            return
+        
+        if session_id not in self.sessions:
+            print(f"❌ 会话不存在: {session_id}")
+            return
+        
+        session = self.sessions[session_id]
+        filepath = self.session_store.export_session(session_id)
+        
+        if filepath:
+            print(f"✅ 已导出会话: {session.name}")
+            print(f"📄 文件: {filepath}")
+        else:
+            print(f"❌ 导出失败")
     
     def clear_current_session(self):
         """清空当前会话历史"""
@@ -554,23 +726,34 @@ class OllamaPilotChat:
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         OllamaPilot 帮助                            │
 ├─────────────────────────────────────────────────────────────────────┤
-│  命令                          说明                                 │
+│  基础命令                                                           │
 ├─────────────────────────────────────────────────────────────────────┤
 │  /help                         显示此帮助信息                       │
 │  /model                        列出并切换对话模型                   │
 │  /model <name>                 直接切换到指定模型                   │
 │  /embedding                    切换 Embedding 模型                  │
-│  /new                          开始新对话                           │
-│  /sessions                     列出所有会话                         │
-│  /switch <id>                  切换到指定会话                       │
-│  /clear                        清空当前对话历史                     │
 │  /info                         显示当前状态信息                     │
-│  /messages                     显示当前会话的消息列表               │
+│  /reload                       重新加载 .env 配置                   │
+│  quit/exit/q                   退出程序                             │
+├─────────────────────────────────────────────────────────────────────┤
+│  会话管理 (新增)                                                    │
+├─────────────────────────────────────────────────────────────────────┤
+│  /new [名称]                   创建新会话                           │
+│  /sessions                     列出所有会话(含数据库恢复的)          │
+│  /switch <id>                  切换到指定会话                       │
+│  /history [id]                 查看会话历史(默认当前会话)           │
+│  /rename <名称>                重命名当前会话                       │
+│  /delete <id>                  删除指定会话                         │
+│  /export [id]                  导出会话为 Markdown                  │
+│  /clear                        清空当前对话历史                     │
+├─────────────────────────────────────────────────────────────────────┤
+│  文档管理                                                           │
+├─────────────────────────────────────────────────────────────────────┤
 │  /docs                         列出所有文档                         │
 │  /index [path]                 索引文档/文件夹(默认:knowledge_base) │
 │  /resume                       恢复失败的索引任务                   │
-│  /reload                       重新加载 .env 配置                   │
-│  quit/exit/q                   退出程序                             │
+├─────────────────────────────────────────────────────────────────────┤
+│  图例: 💾 内存会话  📦 数据库恢复的会话                              │
 └─────────────────────────────────────────────────────────────────────┘
 """
         print(help_text)
@@ -781,6 +964,25 @@ class OllamaPilotChat:
 
         elif cmd == '/messages':
             self.show_messages()
+        
+        # 新增会话管理命令
+        elif cmd == '/history':
+            self.show_session_history(arg1)
+        
+        elif cmd == '/rename':
+            if arg1:
+                self.rename_session(arg1)
+            else:
+                print("⚠️ 请指定新名称，例如: /rename 项目讨论")
+        
+        elif cmd == '/delete':
+            if arg1:
+                self.delete_session(arg1)
+            else:
+                print("⚠️ 请指定会话ID，例如: /delete session_1")
+        
+        elif cmd == '/export':
+            self.export_session(arg1)
 
         else:
             print(f"❌ 未知命令: {cmd}，输入 /help 查看帮助")

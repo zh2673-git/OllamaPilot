@@ -606,12 +606,31 @@ class QQChannel(Channel):
             return
 
         # 处理消息
-        response = await self.handle_message(message)
-
-        if response:
+        print(f"🤖 正在处理消息...")
+        try:
+            response = await self.message_handler(message)
+            print(f"✅ 消息处理完成，准备发送回复")
+            
             # 从 ChannelResponse 中提取内容
-            content = response.content if hasattr(response, 'content') else str(response)
-            await self._send_c2c_message(user_id, content, msg_id)
+            if hasattr(response, 'content'):
+                content = response.content
+            else:
+                content = str(response)
+            
+            print(f"📤 回复内容长度: {len(content)} 字符")
+            
+            if content:
+                success = await self._send_c2c_message(user_id, content, msg_id)
+                if success:
+                    print(f"✅ 回复已发送")
+                else:
+                    print(f"❌ 回复发送失败")
+            else:
+                print(f"⚠️ 回复内容为空，不发送")
+        except Exception as e:
+            print(f"⚠️ 处理消息失败: {e}")
+            import traceback
+            traceback.print_exc()
 
     async def _handle_group_at_message(self, data: Dict[str, Any]):
         """处理群聊@消息 (GROUP_AT_MESSAGE_CREATE)"""
@@ -643,12 +662,21 @@ class QQChannel(Channel):
         )
 
         # 处理消息
-        response = await self.handle_message(message)
-
-        if response:
+        try:
+            response = await self.message_handler(message)
+            
             # 从 ChannelResponse 中提取内容
-            content = response.content if hasattr(response, 'content') else str(response)
-            await self._send_group_message(group_id, content, msg_id)
+            if hasattr(response, 'content'):
+                content = response.content
+            else:
+                content = str(response)
+            
+            if content:
+                await self._send_group_message(group_id, content, msg_id)
+        except Exception as e:
+            print(f"⚠️ 处理群消息失败: {e}")
+            import traceback
+            traceback.print_exc()
 
     async def _handle_message_create(self, data: Dict[str, Any]):
         """处理频道消息"""
@@ -661,23 +689,43 @@ class QQChannel(Channel):
         
         print(f"📨 [QQ频道:{channel_id}] {message.user_name}({message.user_id}): {message.content[:50]}...")
         
-        response = await self.handle_message(message)
-        
-        if response:
-            await self.send_message(message.user_id, response)
+        try:
+            response = await self.message_handler(message)
+            
+            if hasattr(response, 'content'):
+                content = response.content
+            else:
+                content = str(response)
+            
+            if content:
+                await self.send_message(message.user_id, content)
+        except Exception as e:
+            print(f"⚠️ 处理频道消息失败: {e}")
+            import traceback
+            traceback.print_exc()
     
     async def _handle_direct_message(self, data: Dict[str, Any]):
         """处理私信"""
-        message_data = data.get("msg", {})
+        message_data = data.get("d", {})  # QQ Bot v2 使用 "d" 字段
         
         message = self._parse_message(message_data, "private")
         
         print(f"📨 [QQ私信] {message.user_name}({message.user_id}): {message.content[:50]}...")
         
-        response = await self.handle_message(message)
-        
-        if response:
-            await self.send_message(message.user_id, response)
+        try:
+            response = await self.message_handler(message)
+            
+            if hasattr(response, 'content'):
+                content = response.content
+            else:
+                content = str(response)
+            
+            if content:
+                await self.send_message(message.user_id, content)
+        except Exception as e:
+            print(f"⚠️ 处理私信失败: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _parse_message(self, data: Dict[str, Any], message_type: str, **kwargs) -> ChannelMessage:
         """解析消息为标准格式"""

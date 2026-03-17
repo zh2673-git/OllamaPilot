@@ -2,6 +2,12 @@
 Skill 基类定义
 
 定义 Skill 的标准接口和元数据结构。
+
+Skill 是 Context 的模块化单元，包含：
+- 工具定义 → 告诉模型"你能做什么"
+- 提示词模板 → 告诉模型"怎么做"
+- 示例 → 告诉模型"期望的输出格式"
+- 知识 → Skill 特有的领域知识
 """
 
 from abc import ABC, abstractmethod
@@ -29,6 +35,8 @@ class Skill(ABC):
     
     所有 Skill 必须继承此类并实现必要的方法。
     Skill 是可独立开发、部署的功能模块。
+    
+    Skill 是 Context 的模块化单元，不是工具集合，而是结构化的 Context 片段。
     
     示例:
         class WeatherSkill(Skill):
@@ -112,3 +120,61 @@ class Skill(ABC):
     
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__}(name='{self.name}', version='{self.version}')>"
+    
+    # ========== Context 集成（新增）==========
+    
+    def to_context(self) -> "SkillContext":
+        """
+        将 Skill 转换为 Context 片段
+        
+        Skill 是 Context 的模块化单元，包含：
+        - 工具定义 → 告诉模型"你能做什么"
+        - 提示词模板 → 告诉模型"怎么做"
+        - 示例 → 告诉模型"期望的输出格式"
+        - 知识 → Skill 特有的领域知识
+        
+        Returns:
+            SkillContext: Skill Context 片段
+        """
+        from ollamapilot.context.types import SkillContext, ToolDefinition, Example
+        
+        return SkillContext(
+            tool_definitions=self.get_tool_definitions(),
+            system_prompt=self.get_system_prompt(),
+            examples=self.get_examples(),
+            knowledge=self.get_knowledge(),
+        )
+    
+    def get_tool_definitions(self) -> List["ToolDefinition"]:
+        """
+        获取工具定义列表
+        
+        Returns:
+            List[ToolDefinition]: 工具定义列表
+        """
+        from ollamapilot.context.types import ToolDefinition
+        
+        tools = self.get_tools()
+        return [ToolDefinition.from_tool(t) for t in tools]
+    
+    def get_examples(self) -> List["Example"]:
+        """
+        获取示例列表
+        
+        子类可以覆盖此方法提供示例。
+        
+        Returns:
+            List[Example]: 示例列表
+        """
+        return []
+    
+    def get_knowledge(self) -> Optional[str]:
+        """
+        获取 Skill 特有的领域知识
+        
+        子类可以覆盖此方法提供领域知识。
+        
+        Returns:
+            str | None: 领域知识，None 表示不提供
+        """
+        return None

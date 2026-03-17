@@ -659,11 +659,248 @@ def list_knowledge_categories() -> str:
         return f"❌ 获取分类列表失败: {str(e)}"
 
 
+# ========== 实时模式工具（新增）==========
+
+@tool
+def add_and_search(file_path: str, query: str, n_results: int = 5) -> str:
+    """
+    实时模式：即时添加文档并检索
+    
+    无需提前索引，即用即走：
+    1. 实时处理文档
+    2. 临时索引（内存中）
+    3. 立即检索
+    4. 清理临时索引
+    
+    适用于临时上传的PDF、粘贴的文本等一次性查询场景。
+    
+    Args:
+        file_path: 文档路径
+        query: 查询内容
+        n_results: 返回结果数量
+        
+    Returns:
+        检索结果
+    """
+    if not _graph_service or not _entity_extractor:
+        return "❌ 服务未初始化"
+    
+    try:
+        from pathlib import Path
+        import tempfile
+        import shutil
+        
+        source_path = Path(file_path)
+        if not source_path.exists():
+            return f"❌ 文件不存在: {file_path}"
+        
+        # 创建临时目录
+        with tempfile.TemporaryDirectory() as temp_dir:
+            print(f"🔄 实时模式处理: {source_path.name}")
+            
+            # 1. 实时处理文档
+            try:
+                embedding_model = _graph_service.embedding_model if _graph_service else None
+                processor = DocumentProcessor.from_model_name(embedding_model) if embedding_model else DocumentProcessor()
+            except Exception:
+                processor = DocumentProcessor()
+            
+            text = processor.read_document(file_path)
+            if not text:
+                return f"❌ 无法读取文档内容: {file_path}"
+            
+            print(f"✅ 文档读取完成，长度: {len(text)} 字符")
+            
+            # 分块
+            chunks = processor.chunk_text(text)
+            print(f"✅ 分块完成，共 {len(chunks)} 块")
+            
+            # 2. 临时索引（内存中）
+            temp_entities = []
+            temp_relations = []
+            temp_docs = []
+            
+            for i, chunk in enumerate(chunks):
+                try:
+                    # 抽取实体和关系
+                    entities, relations = _entity_extractor.extract(
+                        chunk,
+                        use_llm=_use_llm,
+                        llm_client=_llm_client,
+                        top_k=20
+                    )
+                    
+                    temp_entities.extend(entities)
+                    temp_relations.extend(relations)
+                    temp_docs.append({
+                        "content": chunk,
+                        "index": i,
+                        "entities": entities
+                    })
+                except Exception as e:
+                    print(f"  ⚠️ 处理第 {i+1} 块时出错: {e}")
+                    continue
+            
+            print(f"✅ 临时索引完成，实体: {len(temp_entities)}, 关系: {len(temp_relations)}")
+            
+            # 3. 立即检索
+            # 提取查询实体
+            query_entities = _entity_extractor.extract_from_query(query)
+            
+            # 基于实体匹配和向量相似度检索
+            results = []
+            
+            # 实体匹配
+            query_entity_names = {e['name'] for e in query_entities}
+            for doc in temp_docs:
+                doc_entity_names = {e.name for e in doc['entities']}
+                overlap = query_entity_names & doc_entity_names
+                if overlap:
+                    results.append({
+                        "content": doc['content'],
+                        "score": len(overlap) / len(query_entity_names) if query_entity_names else 0,
+                        "source": f"{source_path.name} (块 {doc['index']})",
+                        "match_type": "entity"
+                    })
+            
+            # 按分数排序
+            results.sort(key=lambda x: x['score'], reverse=True)
+            results = results[:n_results]
+            
+            # 4. 格式化结果（临时索引自动清理）
+            if not results:
+                return f"🔍 未找到与 '{query}' 相关的内容\n   文档已处理: {len(chunks)} 块, {len(temp_entities)} 实体"
+            
+            output = [
+                f"🔍 实时检索结果 ({len(results)} 条)",
+                f"文档: {source_path.name}",
+                f"处理: {len(chunks)} 块, {len(temp_entities)} 实体",
+                "=" * 50
+            ]
+            
+            for i, doc in enumerate(results, 1):
+                score = doc.get("score", 0)
+                content = doc.get("content", "")[:400]
+                source = doc.get("source", "未知")
+                
+                output.append(f"\n[{i}] 来源: {source} | 匹配度: {score:.2f}")
+                output.append(f"    {content}...")
+            
+            return "\n".join(output)
+        
+    except Exception as e:
+        return f"❌ 实时检索失败: {str(e)}"
+
+
+@tool
+def add_text_and_search(text: str, query: str, n_results: int = 5) -> str:
+    """
+    实时模式：直接粘贴文本并检索
+    
+    无需提前索引，直接粘贴文本即可检索。
+    适用于临时文本分析场景。
+    
+    Args:
+        text: 文本内容
+        query: 查询内容
+        n_results: 返回结果数量
+        
+    Returns:
+        检索结果
+    """
+    if not _graph_service or not _entity_extractor:
+        return "❌ 服务未初始化"
+    
+    try:
+        import tempfile
+        
+        # 1. 实时处理文本
+        try:
+            embedding_model = _graph_service.embedding_model if _graph_service else None
+            processor = DocumentProcessor.from_model_name(embedding_model) if embedding_model else DocumentProcessor()
+        except Exception:
+            processor = DocumentProcessor()
+        
+        # 分块
+        chunks = processor.chunk_text(text)
+        print(f"✅ 文本分块完成，共 {len(chunks)} 块")
+        
+        # 2. 临时索引
+        temp_entities = []
+        temp_docs = []
+        
+        for i, chunk in enumerate(chunks):
+            try:
+                entities, _ = _entity_extractor.extract(
+                    chunk,
+                    use_llm=_use_llm,
+                    llm_client=_llm_client,
+                    top_k=20
+                )
+                
+                temp_entities.extend(entities)
+                temp_docs.append({
+                    "content": chunk,
+                    "index": i,
+                    "entities": entities
+                })
+            except Exception as e:
+                print(f"  ⚠️ 处理第 {i+1} 块时出错: {e}")
+                continue
+        
+        print(f"✅ 临时索引完成，实体: {len(temp_entities)}")
+        
+        # 3. 立即检索
+        query_entities = _entity_extractor.extract_from_query(query)
+        query_entity_names = {e['name'] for e in query_entities}
+        
+        results = []
+        for doc in temp_docs:
+            doc_entity_names = {e.name for e in doc['entities']}
+            overlap = query_entity_names & doc_entity_names
+            if overlap:
+                results.append({
+                    "content": doc['content'],
+                    "score": len(overlap) / len(query_entity_names) if query_entity_names else 0,
+                    "source": f"文本块 {doc['index']}",
+                    "match_type": "entity"
+                })
+        
+        # 按分数排序
+        results.sort(key=lambda x: x['score'], reverse=True)
+        results = results[:n_results]
+        
+        # 4. 格式化结果
+        if not results:
+            return f"🔍 未找到与 '{query}' 相关的内容\n   文本已处理: {len(chunks)} 块, {len(temp_entities)} 实体"
+        
+        output = [
+            f"🔍 实时文本检索结果 ({len(results)} 条)",
+            f"处理: {len(chunks)} 块, {len(temp_entities)} 实体",
+            "=" * 50
+        ]
+        
+        for i, doc in enumerate(results, 1):
+            score = doc.get("score", 0)
+            content = doc.get("content", "")[:400]
+            source = doc.get("source", "未知")
+            
+            output.append(f"\n[{i}] {source} | 匹配度: {score:.2f}")
+            output.append(f"    {content}...")
+        
+        return "\n".join(output)
+        
+    except Exception as e:
+        return f"❌ 实时文本检索失败: {str(e)}"
+
+
 # 工具列表
 graphrag_tools = [
     upload_document,  # 新增：上传文档到知识库
     add_document,
     add_text,
+    add_and_search,              # 实时模式：添加并检索文档
+    add_text_and_search,         # 实时模式：添加文本并检索
     generate_ontology,
     query_graph_stats,
     search_all_documents,        # 搜索所有文档

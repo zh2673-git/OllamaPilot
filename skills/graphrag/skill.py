@@ -30,6 +30,8 @@ from skills.graphrag.tools import (
     upload_document,
     add_document,
     add_text,
+    add_and_search,
+    add_text_and_search,
     query_graph_stats,
     search_all_documents,
     search_in_category,
@@ -329,6 +331,8 @@ class GraphRAGSkill(Skill):
             upload_document,  # 上传文档到知识库（推荐）
             add_document,     # 添加文档到知识图谱（不复制到知识库）
             add_text,
+            add_and_search,        # 实时模式：添加并检索文档
+            add_text_and_search,   # 实时模式：添加文本并检索
             query_graph_stats,
             search_all_documents,  # 全局搜索所有文档
             search_in_category,    # 在指定分类中搜索
@@ -446,3 +450,201 @@ class GraphRAGSkill(Skill):
         if self.graph_service:
             return self.graph_service.get_stats()
         return {"total_documents": 0, "total_entities": 0, "total_relations": 0}
+
+    # ========== Context 集成（新增）==========
+
+    def to_context(self) -> "SkillContext":
+        """
+        将 GraphRAG Skill 转换为 Context 片段
+
+        包含知识库描述和统计信息。
+
+        Returns:
+            SkillContext
+        """
+        from ollamapilot.context.types import SkillContext, ToolDefinition, Example
+
+        # 获取知识库概览
+        kb_summary = self._get_kb_summary()
+
+        return SkillContext(
+            tool_definitions=self.get_tool_definitions(),
+            system_prompt=self.get_system_prompt(),
+            examples=self._get_search_examples(),
+            knowledge=kb_summary,
+        )
+
+    def _get_kb_summary(self) -> str:
+        """获取知识库概览"""
+        if not self.graph_service:
+            return "知识库服务未初始化"
+
+        stats = self.graph_service.get_stats()
+        return f"""知识库概览:
+- 文档数: {stats.get('total_documents', 0)}
+- 实体数: {stats.get('total_entities', 0)}
+- 关系数: {stats.get('total_relations', 0)}
+- 支持模式: 预索引模式 + 实时模式
+"""
+
+    def _get_search_examples(self) -> List["Example"]:
+        """获取搜索示例"""
+        from ollamapilot.context.types import Example
+
+        return [
+            Example(
+                input="帮我分析这个PDF并回答其中的问题",
+                output="使用 add_and_search(file_path='path/to/file.pdf', query='问题内容')",
+                description="实时模式：即时添加文档并检索"
+            ),
+            Example(
+                input="搜索伤寒论中关于太阳病的内容",
+                output="使用 search_in_category(category='伤寒论', query='太阳病')",
+                description="在指定分类中搜索"
+            ),
+        ]
+
+    # ========== 实时模式（新增）==========
+
+    def add_and_search(self, file_path: str, query: str, n_results: int = 5) -> List[dict]:
+        """
+        实时模式：即时添加文档并检索
+
+        无需提前索引，即用即走：
+        1. 实时处理文档
+        2. 临时索引（内存中）
+        3. 立即检索
+        4. 清理临时索引
+
+        Args:
+            file_path: 文档路径
+            query: 查询内容
+            n_results: 返回结果数量
+
+        Returns:
+            检索结果列表
+        """
+        from pathlib import Path
+        import tempfile
+
+        source_path = Path(file_path)
+        if not source_path.exists():
+            return [{"error": f"文件不存在: {file_path}"}]
+
+        if not self.graph_service or not self.entity_extractor:
+            return [{"error": "服务未初始化"}]
+
+        try:
+            # 1. 实时处理文档
+            processor = self.document_processor
+            text = processor.read_document(file_path)
+
+            if not text:
+                return [{"error": f"无法读取文档内容: {file_path}"}]
+
+            chunks = processor.chunk_text(text)
+
+            # 2. 临时索引（内存中）
+            temp_docs = []
+            for i, chunk in enumerate(chunks):
+                try:
+                    entities, _ = self.entity_extractor.extract(
+                        chunk,
+                        use_llm=self.use_llm if hasattr(self, 'use_llm') else False,
+                        llm_client=self.llm_client if hasattr(self, 'llm_client') else None,
+                        top_k=20
+                    )
+                    temp_docs.append({
+                        "content": chunk,
+                        "index": i,
+                        "entities": entities
+                    })
+                except Exception:
+                    continue
+
+            # 3. 立即检索
+            query_entities = self.entity_extractor.extract_from_query(query)
+            query_entity_names = {e['name'] for e in query_entities}
+
+            results = []
+            for doc in temp_docs:
+                doc_entity_names = {e.name for e in doc['entities']}
+                overlap = query_entity_names & doc_entity_names
+                if overlap:
+                    results.append({
+                        "content": doc['content'],
+                        "score": len(overlap) / len(query_entity_names) if query_entity_names else 0,
+                        "source": f"{source_path.name} (块 {doc['index']})",
+                        "match_type": "entity"
+                    })
+
+            # 按分数排序
+            results.sort(key=lambda x: x['score'], reverse=True)
+
+            # 4. 返回结果（临时索引自动清理）
+            return results[:n_results]
+
+        except Exception as e:
+            return [{"error": f"实时检索失败: {str(e)}"}]
+
+    def add_text_and_search(self, text: str, query: str, n_results: int = 5) -> List[dict]:
+        """
+        实时模式：直接粘贴文本并检索
+
+        Args:
+            text: 文本内容
+            query: 查询内容
+            n_results: 返回结果数量
+
+        Returns:
+            检索结果列表
+        """
+        if not self.graph_service or not self.entity_extractor:
+            return [{"error": "服务未初始化"}]
+
+        try:
+            # 1. 实时处理文本
+            processor = self.document_processor
+            chunks = processor.chunk_text(text)
+
+            # 2. 临时索引
+            temp_docs = []
+            for i, chunk in enumerate(chunks):
+                try:
+                    entities, _ = self.entity_extractor.extract(
+                        chunk,
+                        use_llm=self.use_llm if hasattr(self, 'use_llm') else False,
+                        llm_client=self.llm_client if hasattr(self, 'llm_client') else None,
+                        top_k=20
+                    )
+                    temp_docs.append({
+                        "content": chunk,
+                        "index": i,
+                        "entities": entities
+                    })
+                except Exception:
+                    continue
+
+            # 3. 立即检索
+            query_entities = self.entity_extractor.extract_from_query(query)
+            query_entity_names = {e['name'] for e in query_entities}
+
+            results = []
+            for doc in temp_docs:
+                doc_entity_names = {e.name for e in doc['entities']}
+                overlap = query_entity_names & doc_entity_names
+                if overlap:
+                    results.append({
+                        "content": doc['content'],
+                        "score": len(overlap) / len(query_entity_names) if query_entity_names else 0,
+                        "source": f"文本块 {doc['index']}",
+                        "match_type": "entity"
+                    })
+
+            # 按分数排序
+            results.sort(key=lambda x: x['score'], reverse=True)
+
+            return results[:n_results]
+
+        except Exception as e:
+            return [{"error": f"实时文本检索失败: {str(e)}"}]
