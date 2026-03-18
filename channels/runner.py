@@ -151,20 +151,20 @@ class ChannelRunner:
             logger.info("🔥 正在预热 Agent（提前加载 Skill）...")
             try:
                 from ollamapilot import OllamaPilotAgent
-                from ollamapilot.infra.checkpoint import CheckpointManager
+                from langgraph.checkpoint.memory import MemorySaver
                 import threading
 
                 def _warmup():
                     """后台预热"""
                     try:
-                        # 使用临时 checkpointer
-                        temp_checkpointer = CheckpointManager("./data/temp_warmup")
+                        # 使用内存 checkpointer（预热不需要持久化）
+                        temp_checkpointer = MemorySaver()
                         temp_agent = OllamaPilotAgent(
                             model=model,
                             skills_dir=skills_dir,
                             verbose=False,  # 预热时减少日志
                             enable_memory=False,  # 预热不需要记忆
-                            checkpointer=temp_checkpointer._saver
+                            checkpointer=temp_checkpointer
                         )
                         # 保存工具列表供后续使用
                         self._warmup_tools = temp_agent.all_tools
