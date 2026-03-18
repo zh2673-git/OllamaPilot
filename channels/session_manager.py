@@ -3,6 +3,8 @@
 
 为 Channels（QQ、飞书、钉钉等）提供用户级别的会话持久化
 每个用户有独立的对话历史，保存在 SQLite 数据库中
+
+使用 OptimizedCheckpoint 实现高性能：内存优先 + 异步持久化
 """
 
 import os
@@ -15,6 +17,7 @@ import json
 from datetime import datetime
 
 from langgraph.checkpoint.sqlite import SqliteSaver
+from ollamapilot.infra.optimized_checkpoint import OptimizedCheckpoint
 
 
 @dataclass
@@ -58,8 +61,9 @@ class ChannelSessionManager:
         self.base_dir = Path(base_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
         
-        # 用户会话缓存: {(channel, user_id): SqliteSaver}
-        self._user_checkpointers: Dict[tuple, SqliteSaver] = {}
+        # 用户会话缓存: {(channel, user_id): OptimizedCheckpoint}
+        # 使用 OptimizedCheckpoint 替代 SqliteSaver，实现内存优先 + 异步持久化
+        self._user_checkpointers: Dict[tuple, OptimizedCheckpoint] = {}
         
         # 线程锁，保护并发访问
         self._lock = threading.RLock()
@@ -99,39 +103,41 @@ class ChannelSessionManager:
         safe_user_id = user_id.replace("/", "_").replace("\\", "_")
         return channel_dir / f"{safe_user_id}.db"
     
-    def get_checkpointer(self, channel: str, user_id: str) -> SqliteSaver:
+    def get_checkpointer(self, channel: str, user_id: str) -> OptimizedCheckpoint:
         """
         获取用户的 checkpointer
-        
+
         如果用户没有活跃的 checkpointer，会创建新的连接
-        
+        使用 OptimizedCheckpoint 实现高性能：内存优先 + 异步持久化
+
         Args:
             channel: 渠道名称 (qq, feishu, dingtalk)
             user_id: 用户 ID
-            
+
         Returns:
-            SqliteSaver 实例
+            OptimizedCheckpoint 实例
         """
         key = (channel, user_id)
-        
+
         with self._lock:
             # 检查是否已有缓存的 checkpointer
             if key in self._user_checkpointers:
                 return self._user_checkpointers[key]
-            
-            # 创建新的数据库连接
+
+            # 创建新的 OptimizedCheckpoint（内存优先 + 异步持久化）
             db_path = self._get_user_db_path(channel, user_id)
-            conn = sqlite3.connect(str(db_path), check_same_thread=False)
-            
-            # 创建 SqliteSaver
-            checkpointer = SqliteSaver(conn)
-            
+            checkpointer = OptimizedCheckpoint(
+                db_path=str(db_path),
+                save_interval=30,  # 每30秒自动保存一次
+                verbose=False  # 渠道模式下减少日志输出
+            )
+
             # 缓存起来
             self._user_checkpointers[key] = checkpointer
-            
+
             # 记录会话元数据
             self._record_session_start(channel, user_id)
-            
+
             return checkpointer
     
     def _record_session_start(self, channel: str, user_id: str):

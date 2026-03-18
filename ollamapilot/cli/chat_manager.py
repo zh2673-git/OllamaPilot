@@ -719,7 +719,91 @@ class OllamaPilotChat:
             print(f"   向量模型: {self.config.embedding_model}")
         except Exception as e:
             print(f"\n❌ 配置重载失败: {e}")
-    
+
+    def upload_and_analyze(self, filepath: str = None):
+        """上传并分析文件/图片"""
+        from ollamapilot.utils.file_processor import get_file_processor
+        from pathlib import Path
+
+        processor = get_file_processor()
+
+        # 如果没有提供路径，提示用户输入
+        if not filepath:
+            filepath = input("请输入文件路径: ").strip()
+
+        if not filepath:
+            print("⚠️ 未指定文件路径")
+            return
+
+        path = Path(filepath)
+        if not path.exists():
+            print(f"❌ 文件不存在: {filepath}")
+            return
+
+        print(f"\n📄 正在分析文件: {path.name}")
+
+        try:
+            # 检查是否是图片
+            suffix = path.suffix.lower()
+            image_suffixes = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']
+
+            if suffix in image_suffixes:
+                # 图片分析
+                print("🖼️  正在分析图片内容...")
+                import asyncio
+                description = asyncio.run(processor.analyze_image(
+                    path,
+                    query="描述这张图片的内容",
+                    model=self.agent.model if hasattr(self.agent, 'model') else None
+                ))
+                content = f"🖼️ 图片分析结果:\n{description}"
+            else:
+                # 文档分析
+                print("📄 正在提取文档内容...")
+                text = processor.extract_text_content(path)
+
+                if text.startswith('[') and text.endswith(']'):
+                    # 错误信息
+                    print(f"⚠️ {text}")
+                    return
+
+                content = f"📄 文件: {path.name}\n{text[:8000]}"  # 限制长度
+
+            # 询问用户问题
+            print("\n💬 文件内容已加载")
+            user_question = input("请输入你的问题(直接回车总结内容): ").strip()
+
+            if not user_question:
+                user_question = "请总结这份文件的主要内容"
+
+            # 构建提示词
+            prompt = f"""请根据以下文件内容回答问题：
+
+{content}
+
+用户问题: {user_question}
+
+请基于以上内容回答。"""
+
+            print("\n🤖 正在分析...")
+            print("\n助手: ", end="", flush=True)
+
+            # 调用agent
+            full_response = ""
+            for chunk in self.agent.stream(prompt, thread_id=self.current_session_id):
+                if isinstance(chunk, dict) and 'messages' in chunk:
+                    for msg in chunk['messages']:
+                        if hasattr(msg, 'content') and msg.content:
+                            print(msg.content, end='', flush=True)
+                            full_response += msg.content
+
+            print()  # 换行
+
+        except Exception as e:
+            print(f"\n❌ 分析失败: {e}")
+            import traceback
+            traceback.print_exc()
+
     def show_help(self):
         """显示帮助信息"""
         help_text = """
@@ -746,6 +830,11 @@ class OllamaPilotChat:
 │  /delete <id>                  删除指定会话                         │
 │  /export [id]                  导出会话为 Markdown                  │
 │  /clear                        清空当前对话历史                     │
+├─────────────────────────────────────────────────────────────────────┤
+│  文件/图片分析                                                      │
+├─────────────────────────────────────────────────────────────────────┤
+│  /upload [path]                上传并分析文件/图片                  │
+│                                 支持: PDF, DOCX, TXT, MD, JPG, PNG  │
 ├─────────────────────────────────────────────────────────────────────┤
 │  文档管理                                                           │
 ├─────────────────────────────────────────────────────────────────────┤
@@ -983,6 +1072,9 @@ class OllamaPilotChat:
         
         elif cmd == '/export':
             self.export_session(arg1)
+
+        elif cmd == '/upload':
+            self.upload_and_analyze(arg1)
 
         else:
             print(f"❌ 未知命令: {cmd}，输入 /help 查看帮助")

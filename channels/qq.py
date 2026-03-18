@@ -730,22 +730,36 @@ class QQChannel(Channel):
     def _parse_message(self, data: Dict[str, Any], message_type: str, **kwargs) -> ChannelMessage:
         """解析消息为标准格式"""
         author = data.get("author", {})
-        
+
         content = data.get("content", "")
         mentions = data.get("mentions", [])
-        
+
         at_me = False
         for mention in mentions:
             if mention.get("id") == self.app_id:
                 at_me = True
                 break
-        
+
         images = []
+        files = []
         attachments = data.get("attachments", [])
+
         for att in attachments:
-            if att.get("content_type", "").startswith("image/"):
+            content_type = att.get("content_type", "")
+            if content_type.startswith("image/"):
                 images.append(att.get("url", ""))
-        
+            else:
+                # 其他文件类型
+                files.append({
+                    'url': att.get("url", ""),
+                    'filename': att.get("filename", "unknown"),
+                    'content_type': content_type,
+                    'size': att.get("size", 0)
+                })
+
+        # 将文件信息存入 raw_data
+        data['files'] = files
+
         return ChannelMessage(
             message_id=str(data.get("id", "")),
             user_id=str(author.get("id", "")),

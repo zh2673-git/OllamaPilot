@@ -22,6 +22,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.checkpoint.memory import MemorySaver
 
+from ollamapilot.infra.optimized_checkpoint import OptimizedCheckpoint
 from ollamapilot.skills import SkillRegistry
 from ollamapilot.tools.builtin import (
     read_file, write_file, list_directory, search_files,
@@ -130,8 +131,8 @@ class OllamaPilotAgent:
 
         # 动态检测模型上下文大小
         detected_tokens = None
+        model_name = _detect_model_name(model)
         if auto_detect_context and max_context_tokens is None:
-            model_name = _detect_model_name(model)
             if model_name:
                 try:
                     detected_tokens = get_recommended_num_ctx(model_name)
@@ -154,6 +155,10 @@ class OllamaPilotAgent:
         skill_config = {}
         if embedding_model:
             skill_config["graphrag"] = {"embedding_model": embedding_model}
+        # 添加主模型名称（用于动态上下文判断）
+        if model_name:
+            skill_config["graphrag"] = skill_config.get("graphrag", {})
+            skill_config["graphrag"]["model_name"] = model_name
 
         # 初始化 Skill 注册中心
         self.skill_registry = SkillRegistry(skill_config=skill_config)
@@ -171,35 +176,22 @@ class OllamaPilotAgent:
             self.checkpointer = checkpointer
         elif enable_memory:
             if memory_storage == "sqlite":
-                # 使用 SQLite 持久化存储（异步版本，支持流式输出）
+                # 使用优化版 Checkpoint：内存优先 + 异步持久化
                 import os
                 os.makedirs(os.path.dirname(memory_db_path), exist_ok=True)
-                # 使用 AsyncSqliteSaver 支持异步方法（流式输出需要）
                 try:
-                    import asyncio
-                    import aiosqlite
-                    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-                    
-                    # 创建异步初始化函数
-                    async def _init_sqlite():
-                        saver = AsyncSqliteSaver(conn=await aiosqlite.connect(memory_db_path))
-                        # 初始化表结构
-                        await saver.setup()
-                        return saver
-                    
-                    # 在同步代码中异步初始化，但要保留事件循环供后续使用
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    self.checkpointer = loop.run_until_complete(_init_sqlite())
-                    # 不关闭事件循环，因为后续流式输出需要它
-                    
+                    self.checkpointer = OptimizedCheckpoint(
+                        db_path=memory_db_path,
+                        save_interval=30,  # 每30秒自动保存一次
+                        verbose=verbose
+                    )
                     if verbose:
-                        print(f"💾 对话记忆已启用 (SQLite): {memory_db_path}")
+                        print(f"💾 对话记忆已启用 (优化版 SQLite): {memory_db_path}")
                 except Exception as e:
                     # 如果初始化失败，回退到内存存储
                     self.checkpointer = MemorySaver()
                     if verbose:
-                        print(f"⚠️  SQLite 初始化失败，使用内存模式: {e}")
+                        print(f"⚠️  优化版 Checkpoint 初始化失败，使用内存模式: {e}")
             else:
                 # 使用内存存储（程序重启后丢失）
                 self.checkpointer = MemorySaver()

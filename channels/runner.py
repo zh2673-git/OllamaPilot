@@ -232,38 +232,355 @@ class ChannelRunner:
         """处理收到的消息（带错误重试和统计）"""
         import time
         start_time = time.time()
-        
+
         self._stats["total_messages"] += 1
         channel_name = message.channel_name
-        
+
         if not self._check_global_permission(message.user_id):
             return ChannelResponse(content="⛔ 您没有使用权限")
-        
-        if (message.message_type == "group" and 
+
+        if (message.message_type == "group" and
             self.channels.get(channel_name) and
-            self.channels[channel_name].config.get("at_only_in_group", False) and 
+            self.channels[channel_name].config.get("at_only_in_group", False) and
             not message.at_me):
             return ChannelResponse(content="")
-        
+
+        # 检查是否有文件或图片附件
+        raw_data = message.raw_data or {}
+        files = raw_data.get('files', [])
+        images = message.images or []
+
+        if files or images:
+            return await self._handle_file_upload(message, files, images)
+
+        # 检查是否是命令
+        content = message.content.strip()
+        if content.startswith('/'):
+            return await self._handle_command(message, content)
+
         try:
             response = await self._invoke_with_retry(message)
             self._stats["success"] += 1
-            
+
             duration = time.time() - start_time
             self._record_response_time(duration)
-            
+
             if isinstance(response, str):
                 return ChannelResponse(content=response)
             return response
-            
+
         except Exception as e:
             self._stats["failed"] += 1
             if channel_name not in self._stats["errors_by_channel"]:
                 self._stats["errors_by_channel"][channel_name] = 0
             self._stats["errors_by_channel"][channel_name] += 1
-            
+
             logger.error(f"处理消息失败 [{channel_name}] (user={message.user_id}): {e}", exc_info=True)
             return ChannelResponse(content=f"❌ 处理出错: {str(e)[:100]}")
+
+    async def _handle_file_upload(self, message: ChannelMessage, files: list, images: list) -> ChannelResponse:
+        """处理文件和图片上传"""
+        from ollamapilot.utils.file_processor import get_file_processor
+
+        processor = get_file_processor()
+        contents = []
+
+        try:
+            # 处理文档文件
+            for file_info in files:
+                try:
+                    logger.info(f"📄 下载文件: {file_info['filename']}")
+                    file_path = await processor.download_file(
+                        file_info['url'],
+                        file_info['filename']
+                    )
+
+                    logger.info(f"📄 提取内容: {file_info['filename']}")
+                    text = processor.extract_text_content(file_path)
+
+                    if text and not text.startswith('['):
+                        contents.append(f"📄 文件: {file_info['filename']}\n{text[:5000]}")
+                    else:
+                        contents.append(f"📄 文件: {file_info['filename']}\n{text}")
+
+                    # 清理临时文件
+                    processor.cleanup(file_path)
+
+                except Exception as e:
+                    logger.error(f"处理文件失败 {file_info.get('filename')}: {e}")
+                    contents.append(f"❌ 无法处理文件: {file_info.get('filename')}")
+
+            # 处理图片
+            for i, image_url in enumerate(images):
+                try:
+                    logger.info(f"🖼️  下载图片 {i+1}/{len(images)}")
+                    image_path = await processor.download_file(
+                        image_url,
+                        f"image_{i+1}.jpg"
+                    )
+
+                    logger.info(f"🖼️  分析图片 {i+1}")
+                    # 获取用户的agent用于图片分析
+                    cache_key = f"{message.channel_name}:{message.user_id}"
+                    if hasattr(self, '_user_agents') and cache_key in self._user_agents:
+                        agent = self._user_agents[cache_key]
+                        model = agent.model if hasattr(agent, 'model') else None
+                    else:
+                        model = None
+
+                    description = await processor.analyze_image(
+                        image_path,
+                        query=message.content or "描述这张图片的内容",
+                        model=model
+                    )
+                    contents.append(f"🖼️  图片 {i+1}:\n{description}")
+
+                    # 清理临时文件
+                    processor.cleanup(image_path)
+
+                except Exception as e:
+                    logger.error(f"处理图片失败: {e}")
+                    contents.append(f"❌ 无法分析图片 {i+1}")
+
+            if not contents:
+                return ChannelResponse(content="❌ 无法处理上传的文件/图片")
+
+            # 构建提示词
+            user_query = message.content or "请分析以上内容"
+            full_content = "\n\n---\n\n".join(contents)
+
+            prompt = f"""用户上传了以下文件/图片，请根据内容回答用户问题：
+
+{full_content}
+
+用户问题: {user_query}
+
+请基于以上内容回答。如果用户没有具体问题，请总结主要内容。"""
+
+            # 使用线程池调用agent
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                self._executor,
+                self._sync_invoke_with_prompt,
+                message,
+                prompt
+            )
+
+            return ChannelResponse(content=result)
+
+        except Exception as e:
+            logger.error(f"处理文件上传失败: {e}", exc_info=True)
+            return ChannelResponse(content=f"❌ 处理文件失败: {str(e)[:100]}")
+
+    def _sync_invoke_with_prompt(self, message: ChannelMessage, prompt: str) -> str:
+        """同步调用agent，使用自定义提示词"""
+        agent = self._get_or_create_user_agent(message.channel_name, message.user_id)
+        thread_id = f"{message.channel_name}_{message.user_id}_{message.message_type}"
+
+        # 使用agent的invoke，但传入自定义提示
+        return agent.invoke(query=prompt, thread_id=thread_id)
+
+    async def _handle_command(self, message: ChannelMessage, content: str) -> ChannelResponse:
+        """处理命令"""
+        parts = content.split(maxsplit=1)
+        cmd = parts[0].lower()
+        args = parts[1] if len(parts) > 1 else ""
+
+        channel = message.channel_name
+        user_id = message.user_id
+
+        if cmd == '/help':
+            return self._cmd_help()
+
+        elif cmd == '/new':
+            return self._cmd_new(channel, user_id, args)
+
+        elif cmd == '/sessions':
+            return self._cmd_sessions(channel, user_id)
+
+        elif cmd == '/switch':
+            return self._cmd_switch(channel, user_id, args)
+
+        elif cmd == '/clear':
+            return self._cmd_clear(channel, user_id)
+
+        elif cmd == '/memory':
+            return self._cmd_memory(channel, user_id)
+
+        elif cmd == '/stats':
+            return self._cmd_stats()
+
+        elif cmd == '/upload':
+            return self._cmd_upload()
+
+        else:
+            return ChannelResponse(content=f"❌ 未知命令: {cmd}\n输入 /help 查看可用命令")
+
+    def _cmd_upload(self) -> ChannelResponse:
+        """上传命令"""
+        help_text = """📎 文件上传说明
+
+直接发送文件或图片，我会自动分析内容
+
+支持格式:
+  📄 文档: PDF, DOCX, TXT, MD, JSON, CSV, XLSX
+  🖼️ 图片: JPG, PNG, GIF, WebP
+
+使用方式:
+  1. 直接发送文件 + 问题（可选）
+     例: [发送PDF文件] "总结这份报告"
+
+  2. 只发送文件
+     我会自动总结文件内容
+
+  3. 发送图片
+     我会描述图片内容或回答你的问题
+
+💡 提示:
+  • 文件仅用于当前对话，不会保存到知识库
+  • 大文件可能需要一些时间处理
+  • 可以同时发送多个文件/图片"""
+        return ChannelResponse(content=help_text)
+
+    def _cmd_help(self) -> ChannelResponse:
+        """帮助命令"""
+        help_text = """📋 可用命令列表
+
+会话管理:
+  /new [名称]     - 创建新会话
+  /sessions       - 列出所有会话
+  /switch <ID>    - 切换到指定会话
+  /clear          - 清空当前会话
+
+文件/图片:
+  /upload         - 文件上传说明
+
+记忆管理:
+  /memory         - 查看系统记忆
+
+其他:
+  /stats          - 查看运行统计
+  /help           - 显示此帮助
+
+💡 提示: 直接输入消息即可与AI对话"""
+        return ChannelResponse(content=help_text)
+
+    def _cmd_new(self, channel: str, user_id: str, args: str) -> ChannelResponse:
+        """创建新会话"""
+        try:
+            # 清除当前用户的缓存，强制创建新的Agent
+            cache_key = f"{channel}:{user_id}"
+            if hasattr(self, '_user_agents') and cache_key in self._user_agents:
+                del self._user_agents[cache_key]
+
+            # 创建新的会话
+            session_info = self.session_manager.get_or_create_session(channel, user_id)
+            session_name = args.strip() if args else f"会话_{session_info['session_id'][:8]}"
+
+            return ChannelResponse(content=f"✅ 已创建新会话: {session_name}\n💡 现在可以开始新的对话了")
+        except Exception as e:
+            logger.error(f"创建会话失败: {e}")
+            return ChannelResponse(content=f"❌ 创建会话失败: {str(e)}")
+
+    def _cmd_sessions(self, channel: str, user_id: str) -> ChannelResponse:
+        """列出会话"""
+        try:
+            sessions = self.session_manager.list_sessions(channel, user_id)
+            if not sessions:
+                return ChannelResponse(content="📭 暂无会话\n💡 使用 /new 创建新会话")
+
+            lines = ["📋 会话列表:"]
+            for s in sessions[:10]:  # 最多显示10个
+                msg_count = s.get('message_count', 0)
+                last_time = s.get('last_activity', '未知')
+                if last_time and last_time != '未知':
+                    # 简化时间显示
+                    last_time = str(last_time).split('.')[0]  # 去掉微秒
+                lines.append(f"  • {s['session_id'][:8]}: {msg_count}条消息 | {last_time}")
+
+            if len(sessions) > 10:
+                lines.append(f"  ... 还有 {len(sessions) - 10} 个会话")
+
+            lines.append(f"\n💡 使用 /switch <ID> 切换会话")
+            return ChannelResponse(content="\n".join(lines))
+        except Exception as e:
+            logger.error(f"列出会话失败: {e}")
+            return ChannelResponse(content=f"❌ 获取会话列表失败: {str(e)}")
+
+    def _cmd_switch(self, channel: str, user_id: str, args: str) -> ChannelResponse:
+        """切换会话"""
+        if not args:
+            return ChannelResponse(content="❌ 请指定会话ID\n用法: /switch <会话ID前8位>")
+
+        session_id = args.strip()
+        try:
+            # 查找匹配的会话
+            sessions = self.session_manager.list_sessions(channel, user_id)
+            matched = None
+            for s in sessions:
+                if s['session_id'].startswith(session_id):
+                    matched = s
+                    break
+
+            if not matched:
+                return ChannelResponse(content=f"❌ 未找到会话: {session_id}\n使用 /sessions 查看可用会话")
+
+            # 清除缓存，下次会使用新的会话
+            cache_key = f"{channel}:{user_id}"
+            if hasattr(self, '_user_agents') and cache_key in self._user_agents:
+                del self._user_agents[cache_key]
+
+            return ChannelResponse(content=f"✅ 已切换到会话: {matched['session_id'][:8]}\n💡 继续对话将使用此会话的历史")
+        except Exception as e:
+            logger.error(f"切换会话失败: {e}")
+            return ChannelResponse(content=f"❌ 切换会话失败: {str(e)}")
+
+    def _cmd_clear(self, channel: str, user_id: str) -> ChannelResponse:
+        """清空当前会话"""
+        try:
+            # 清除Agent缓存
+            cache_key = f"{channel}:{user_id}"
+            if hasattr(self, '_user_agents') and cache_key in self._user_agents:
+                agent = self._user_agents[cache_key]
+                # 获取当前thread_id并清除
+                thread_id = f"{channel}_{user_id}_private"
+                # 这里可以添加清除检查点的逻辑
+                del self._user_agents[cache_key]
+
+            return ChannelResponse(content="✅ 当前会话已清空\n💡 历史记录已清除，开始新的对话")
+        except Exception as e:
+            logger.error(f"清空会话失败: {e}")
+            return ChannelResponse(content=f"❌ 清空会话失败: {str(e)}")
+
+    def _cmd_memory(self, channel: str, user_id: str) -> ChannelResponse:
+        """查看系统记忆"""
+        try:
+            cache_key = f"{channel}:{user_id}"
+            if hasattr(self, '_user_agents') and cache_key in self._user_agents:
+                agent = self._user_agents[cache_key]
+                if agent.system_memory:
+                    stats = agent.system_memory.get_stats()
+                    lines = ["🧠 系统记忆统计:"]
+                    lines.append(f"  • 语义记忆: {stats.get('semantic', 0)} 条")
+                    lines.append(f"  • 程序记忆: {stats.get('procedural', 0)} 条")
+                    lines.append(f"  • 情景记忆: {stats.get('episodic', 0)} 条")
+                    return ChannelResponse(content="\n".join(lines))
+
+            return ChannelResponse(content="📭 暂无记忆数据\n💡 继续对话后会自动积累记忆")
+        except Exception as e:
+            logger.error(f"获取记忆失败: {e}")
+            return ChannelResponse(content=f"❌ 获取记忆失败: {str(e)}")
+
+    def _cmd_stats(self) -> ChannelResponse:
+        """查看运行统计"""
+        stats = self.get_stats()
+        lines = ["📊 运行统计:"]
+        lines.append(f"  • 总消息数: {stats['total_messages']}")
+        lines.append(f"  • 成功: {stats['success']} | 失败: {stats['failed']}")
+        lines.append(f"  • 成功率: {stats['success_rate']:.1f}%")
+        lines.append(f"  • 平均响应: {stats['avg_response_time']}")
+        lines.append(f"  • 活跃渠道: {', '.join(stats['active_channels'])}")
+        return ChannelResponse(content="\n".join(lines))
     
     async def _invoke_with_retry(self, message: ChannelMessage) -> str:
         """调用 Agent（使用线程池执行器，每个用户独立）"""

@@ -22,24 +22,155 @@ _graph_service: Optional[GraphRAGService] = None
 _entity_extractor: Optional[HybridEntityExtractor] = None
 _llm_client: Optional[SimpleLLMClient] = None
 _use_llm: bool = False
-_knowledge_base_dir: str = "./knowledge_base"
-_document_manager: Optional[Any] = None  # DocumentManager 实例
+_knowledge_base_dir: str = "./data/knowledge_base"
+_temp_documents_dir: str = "./data/temp_documents"
+_document_manager: Optional[Any] = None
+_model_name: Optional[str] = None
 
 
 def init_graphrag_services(
     service: GraphRAGService,
     ext: Optional[HybridEntityExtractor] = None,
-    kb_dir: str = "./knowledge_base",
-    doc_manager: Optional[Any] = None
+    kb_dir: str = "./data/knowledge_base",
+    temp_dir: str = "./data/temp_documents",
+    doc_manager: Optional[Any] = None,
+    model_name: Optional[str] = None
 ):
     """初始化服务"""
-    global _graph_service, _entity_extractor, _llm_client, _use_llm, _knowledge_base_dir, _document_manager
+    global _graph_service, _entity_extractor, _llm_client, _use_llm, _knowledge_base_dir, _temp_documents_dir, _document_manager, _model_name
     _graph_service = service
     _entity_extractor = ext or HybridEntityExtractor(persist_dir=service.persist_dir)
     _llm_client = SimpleLLMClient()
     _use_llm = _llm_client.is_available()
     _knowledge_base_dir = kb_dir
+    _temp_documents_dir = temp_dir
     _document_manager = doc_manager
+    _model_name = model_name
+
+
+def _normalize_filename(filename: str) -> str:
+    """
+    标准化文件名用于模糊匹配
+    移除常见标点符号、空格，转为小写
+    """
+    import re
+    # 移除引号、书名号、空格等常见差异字符
+    normalized = re.sub(r'[""''《》【】()（）\s_-]+', '', filename)
+    return normalized.lower()
+
+
+def _find_similar_file(file_path: str) -> Optional[str]:
+    """
+    查找相似文件名（模糊匹配）
+    
+    当精确匹配失败时，尝试在同目录下查找相似文件名。
+    匹配规则：
+    1. 相同扩展名
+    2. 标准化后的文件名相似度 >= 80%
+    
+    Args:
+        file_path: 原始文件路径
+        
+    Returns:
+        匹配到的文件路径，如果没有找到则返回 None
+    """
+    try:
+        from difflib import SequenceMatcher
+        
+        path = Path(file_path)
+        parent_dir = path.parent
+        target_name = path.name
+        target_stem = path.stem
+        target_ext = path.suffix.lower()
+        target_normalized = _normalize_filename(target_name)
+        
+        if not parent_dir.exists():
+            return None
+        
+        best_match = None
+        best_ratio = 0.0
+        
+        # 遍历目录中的所有文件
+        for f in parent_dir.iterdir():
+            if not f.is_file():
+                continue
+            
+            # 扩展名必须匹配
+            if f.suffix.lower() != target_ext:
+                continue
+            
+            # 计算相似度
+            candidate_normalized = _normalize_filename(f.name)
+            ratio = SequenceMatcher(None, target_normalized, candidate_normalized).ratio()
+            
+            # 更新最佳匹配
+            if ratio > best_ratio and ratio >= 0.8:  # 80% 相似度阈值
+                best_ratio = ratio
+                best_match = str(f)
+        
+        return best_match
+        
+    except Exception:
+        return None
+
+
+def should_use_full_text(text_length: int, model_name: Optional[str] = None) -> bool:
+    """
+    判断是否应该直接加载全文而不走向量检索
+    
+    策略：
+    - 获取模型上下文窗口大小
+    - 预留 40% 给对话历史、系统提示、工具结果
+    - 30% 可用于文档（保守估计）
+    - 估算 token 数（中文字符 ≈ 0.6 token）
+    
+    Args:
+        text_length: 文本长度（字符数）
+        model_name: 模型名称
+        
+    Returns:
+        True 表示直接加载全文，False 表示走向量检索
+    """
+    try:
+        from ollamapilot.model_context import get_recommended_num_ctx
+        
+        model = model_name or _model_name
+        if not model:
+            return text_length < 2000
+        
+        max_ctx = get_recommended_num_ctx(model)
+        threshold = int(max_ctx * 0.3)
+        estimated_tokens = text_length * 0.6
+        
+        return estimated_tokens < threshold
+    except Exception:
+        return text_length < 2000
+
+
+def get_full_text_threshold(model_name: Optional[str] = None) -> int:
+    """
+    获取全文加载的字符数阈值
+    
+    Args:
+        model_name: 模型名称
+        
+    Returns:
+        字符数阈值
+    """
+    try:
+        from ollamapilot.model_context import get_recommended_num_ctx
+        
+        model = model_name or _model_name
+        if not model:
+            return 2000
+        
+        max_ctx = get_recommended_num_ctx(model)
+        token_threshold = int(max_ctx * 0.3)
+        char_threshold = int(token_threshold / 0.6)
+        
+        return char_threshold
+    except Exception:
+        return 2000
 
 
 def get_graph_service() -> Optional[GraphRAGService]:
@@ -53,10 +184,18 @@ def upload_document(
     save_to_knowledge_base: bool = True
 ) -> str:
     """
-    上传文档到知识库并建立索引
+    上传文档到知识库并建立完整索引（长期保存）
 
-    文档会被自动保存到知识库目录，然后分块、抽取实体、建立索引。
+    将文档保存到知识库目录，进行分块、实体抽取、关系建立等完整索引流程。
+    适用于需要长期保存、多次查询的文档。
     支持 PDF、TXT、MD、DOCX 等格式。
+
+    使用场景：
+    - 用户明确要求"添加到知识库"、"建立索引"
+    - 需要长期保存的重要文档
+    - 会被多次查询引用的文档
+
+    注意：所有文档（无论长短）都会建立完整索引，确保检索质量。
 
     Args:
         file_path: 文档路径（可以是任意位置的文件）
@@ -70,21 +209,30 @@ def upload_document(
 
     try:
         source_path = Path(file_path)
+        
+        # 文件不存在时尝试模糊匹配
         if not source_path.exists():
-            return f"❌ 文件不存在: {file_path}"
+            similar_file = _find_similar_file(file_path)
+            if similar_file:
+                print(f"🔍 文件名模糊匹配: '{file_path}' -> '{similar_file}'")
+                source_path = Path(similar_file)
+                file_path = similar_file
+            else:
+                return f"❌ 文件不存在: {file_path}"
 
         # 检查文件类型
         supported_ext = {'.txt', '.md', '.pdf', '.docx', '.doc'}
         if source_path.suffix.lower() not in supported_ext:
             return f"❌ 不支持的文件类型: {source_path.suffix}，支持的类型: {', '.join(supported_ext)}"
 
-        # 保存到知识库目录
-        if save_to_knowledge_base:
-            kb_path = Path(_knowledge_base_dir)
-            kb_path.mkdir(parents=True, exist_ok=True)
+        # 知识库文档保存到知识库目录
+        save_dir = Path(_knowledge_base_dir)
+        save_dir.mkdir(parents=True, exist_ok=True)
 
+        # 保存文档
+        if save_to_knowledge_base:
             # 目标路径
-            dest_path = kb_path / source_path.name
+            dest_path = save_dir / source_path.name
 
             # 如果文件已存在，添加数字后缀
             counter = 1
@@ -92,7 +240,7 @@ def upload_document(
             while dest_path.exists():
                 stem = original_dest.stem
                 suffix = original_dest.suffix
-                dest_path = kb_path / f"{stem}_{counter}{suffix}"
+                dest_path = save_dir / f"{stem}_{counter}{suffix}"
                 counter += 1
 
             # 复制文件
@@ -117,8 +265,9 @@ def upload_document(
             return f"❌ 无法读取文档内容: {file_path}"
 
         print(f"✅ 文档读取完成，长度: {len(text)} 字符")
+        print(f"🔄 知识库模式：建立完整索引（文档长度: {len(text)} 字符）")
 
-        # 分块
+        # 长文档：正常索引流程
         print("🔄 正在分块...")
         chunks = processor.chunk_text(text)
         print(f"✅ 分块完成，共 {len(chunks)} 块")
@@ -144,7 +293,8 @@ def upload_document(
                 ]
 
                 # 添加到图谱
-                doc_id = f"kb_{hash(file_path) % 10000}_{i}"
+                doc_prefix = "temp" if is_temporary else "kb"
+                doc_id = f"{doc_prefix}_{hash(file_path) % 10000}_{i}"
                 _graph_service.add_document(
                     text=chunk,
                     doc_id=doc_id,
@@ -152,7 +302,10 @@ def upload_document(
                         "source": file_path,
                         "chunk_index": i,
                         "total_chunks": len(chunks),
-                        "filename": Path(file_path).name
+                        "filename": Path(file_path).name,
+                        "is_short_doc": False,
+                        "is_temporary": is_temporary,
+                        "full_text": None
                     },
                     entities=entity_objects
                 )
@@ -173,6 +326,7 @@ def upload_document(
         dest_info = f"📁 已保存到知识库: {Path(file_path).name}\n" if save_to_knowledge_base else ""
         return f"""✅ 文档上传完成！
 {dest_info}- 文件：{Path(file_path).name}
+- 文档长度：{len(text)} 字符
 - 分块数：{len(chunks)}
 - 新抽取实体：{total_entities}
 - 图谱总实体数：{stats['total_entities']}
@@ -367,6 +521,8 @@ def search_all_documents(
     
     在整个知识库中搜索，不限定特定分类。
     当用户没有指定具体分类时使用此工具。
+    
+    对于短文档，会直接返回全文内容，无需向量检索。
 
     Args:
         query: 查询文本
@@ -384,6 +540,38 @@ def search_all_documents(
 
         # 优先使用 DocumentManager 搜索所有文档
         if _document_manager:
+            # 先检查是否有短文档，直接返回全文
+            short_docs = []
+            for doc_id, doc_info in _document_manager.documents.items():
+                if doc_info.status.name != "COMPLETED":
+                    continue
+                try:
+                    graph_service = _document_manager._get_cached_graph_service(doc_id, doc_info)
+                    all_docs = graph_service.collection.get(include=["metadatas"])
+                    
+                    for i, metadata in enumerate(all_docs.get("metadatas", [])):
+                        if metadata.get("is_short_doc") and metadata.get("full_text"):
+                            short_docs.append({
+                                "document_name": doc_info.name,
+                                "full_text": metadata["full_text"],
+                                "source": metadata.get("source", "未知")
+                            })
+                            break
+                except Exception:
+                    continue
+            
+            if short_docs:
+                output = [f"📄 短文档全文加载 ({len(short_docs)} 个文档)",
+                          "=" * 50]
+                for i, doc in enumerate(short_docs, 1):
+                    output.append(f"\n[{i}] 来源: {doc['document_name']}")
+                    output.append(f"{'─' * 40}")
+                    output.append(doc['full_text'][:2000])
+                    if len(doc['full_text']) > 2000:
+                        output.append(f"\n... (共 {len(doc['full_text'])} 字符)")
+                return "\n".join(output)
+            
+            # 正常向量检索
             results = _document_manager.search_all_documents(query, n_results=n_results)
 
             if query_entities:
@@ -662,134 +850,207 @@ def list_knowledge_categories() -> str:
 # ========== 实时模式工具（新增）==========
 
 @tool
-def add_and_search(file_path: str, query: str, n_results: int = 5) -> str:
+def analyze_document(file_path: str, query: Optional[str] = None) -> str:
     """
-    实时模式：即时添加文档并检索
-    
-    无需提前索引，即用即走：
-    1. 实时处理文档
-    2. 临时索引（内存中）
-    3. 立即检索
-    4. 清理临时索引
-    
-    适用于临时上传的PDF、粘贴的文本等一次性查询场景。
-    
+    实时分析文档内容（一次性查询，不保存到知识库）
+
+    适用于临时上传文档进行快速分析，无需提前索引：
+    - 短文档（<阈值）：直接返回全文内容
+    - 中长文档（>=阈值）：建立临时索引 → 检索相关内容
+
+    文档会被保存到临时目录，可定期清理。
+    如果只需要文档总结，可以不传 query 参数。
+
+    使用场景：
+    - 用户说"分析一下这个文档"
+    - 临时上传的PDF、Word等需要快速查看内容
+    - 一次性查询，不需要长期保存
+
     Args:
         file_path: 文档路径
-        query: 查询内容
-        n_results: 返回结果数量
-        
+        query: 查询内容（可选，不传则返回文档总结）
+
     Returns:
-        检索结果
+        分析结果或检索结果
     """
     if not _graph_service or not _entity_extractor:
         return "❌ 服务未初始化"
     
     try:
         from pathlib import Path
-        import tempfile
         import shutil
-        
+        import time
+
         source_path = Path(file_path)
+
+        # 文件不存在时尝试模糊匹配
         if not source_path.exists():
-            return f"❌ 文件不存在: {file_path}"
-        
-        # 创建临时目录
-        with tempfile.TemporaryDirectory() as temp_dir:
-            print(f"🔄 实时模式处理: {source_path.name}")
-            
-            # 1. 实时处理文档
-            try:
-                embedding_model = _graph_service.embedding_model if _graph_service else None
-                processor = DocumentProcessor.from_model_name(embedding_model) if embedding_model else DocumentProcessor()
-            except Exception:
-                processor = DocumentProcessor()
-            
-            text = processor.read_document(file_path)
-            if not text:
-                return f"❌ 无法读取文档内容: {file_path}"
-            
-            print(f"✅ 文档读取完成，长度: {len(text)} 字符")
-            
-            # 分块
-            chunks = processor.chunk_text(text)
-            print(f"✅ 分块完成，共 {len(chunks)} 块")
-            
-            # 2. 临时索引（内存中）
-            temp_entities = []
-            temp_relations = []
-            temp_docs = []
-            
-            for i, chunk in enumerate(chunks):
-                try:
-                    # 抽取实体和关系
-                    entities, relations = _entity_extractor.extract(
-                        chunk,
-                        use_llm=_use_llm,
-                        llm_client=_llm_client,
-                        top_k=20
-                    )
-                    
-                    temp_entities.extend(entities)
-                    temp_relations.extend(relations)
-                    temp_docs.append({
-                        "content": chunk,
-                        "index": i,
-                        "entities": entities
-                    })
-                except Exception as e:
-                    print(f"  ⚠️ 处理第 {i+1} 块时出错: {e}")
-                    continue
-            
-            print(f"✅ 临时索引完成，实体: {len(temp_entities)}, 关系: {len(temp_relations)}")
-            
-            # 3. 立即检索
-            # 提取查询实体
-            query_entities = _entity_extractor.extract_from_query(query)
-            
-            # 基于实体匹配和向量相似度检索
-            results = []
-            
-            # 实体匹配
-            query_entity_names = {e['name'] for e in query_entities}
-            for doc in temp_docs:
-                doc_entity_names = {e.name for e in doc['entities']}
-                overlap = query_entity_names & doc_entity_names
-                if overlap:
-                    results.append({
-                        "content": doc['content'],
-                        "score": len(overlap) / len(query_entity_names) if query_entity_names else 0,
-                        "source": f"{source_path.name} (块 {doc['index']})",
-                        "match_type": "entity"
-                    })
-            
-            # 按分数排序
-            results.sort(key=lambda x: x['score'], reverse=True)
-            results = results[:n_results]
-            
-            # 4. 格式化结果（临时索引自动清理）
-            if not results:
-                return f"🔍 未找到与 '{query}' 相关的内容\n   文档已处理: {len(chunks)} 块, {len(temp_entities)} 实体"
-            
+            similar_file = _find_similar_file(file_path)
+            if similar_file:
+                print(f"🔍 文件名模糊匹配: '{file_path}' -> '{similar_file}'")
+                source_path = Path(similar_file)
+                file_path = similar_file
+            else:
+                return f"❌ 文件不存在: {file_path}"
+
+        # 保存到临时目录
+        temp_dir = Path(_temp_documents_dir)
+        temp_dir.mkdir(parents=True, exist_ok=True)
+
+        # 生成临时文件名
+        timestamp = int(time.time())
+        temp_filename = f"temp_{timestamp}_{source_path.name}"
+        temp_file_path = temp_dir / temp_filename
+
+        # 复制文件到临时目录
+        shutil.copy2(source_path, temp_file_path)
+        print(f"📂 已保存到临时文档: {temp_file_path}")
+
+        print(f"🔄 实时分析文档: {source_path.name}")
+
+        # 1. 读取文档
+        try:
+            embedding_model = _graph_service.embedding_model if _graph_service else None
+            processor = DocumentProcessor.from_model_name(embedding_model) if embedding_model else DocumentProcessor()
+        except Exception:
+            processor = DocumentProcessor()
+
+        text = processor.read_document(file_path)
+        if not text:
+            return f"❌ 无法读取文档内容: {file_path}"
+
+        print(f"✅ 文档读取完成，长度: {len(text)} 字符")
+
+        # 2. 判断是否为短文档，直接返回全文
+        if should_use_full_text(len(text)):
+            threshold = get_full_text_threshold()
+            print(f"📄 短文档检测（{len(text)} < {threshold} 字符），直接返回全文")
+
+            # 短文档直接返回全文
             output = [
-                f"🔍 实时检索结果 ({len(results)} 条)",
+                f"📄 实时文档分析（短文档模式）",
                 f"文档: {source_path.name}",
-                f"处理: {len(chunks)} 块, {len(temp_entities)} 实体",
-                "=" * 50
+                f"长度: {len(text)} 字符",
+                "=" * 50,
             ]
-            
-            for i, doc in enumerate(results, 1):
-                score = doc.get("score", 0)
-                content = doc.get("content", "")[:400]
-                source = doc.get("source", "未知")
-                
-                output.append(f"\n[{i}] 来源: {source} | 匹配度: {score:.2f}")
-                output.append(f"    {content}...")
-            
+
+            if query:
+                # 如果有查询，在全文内搜索相关内容
+                output.append(f"\n【查询】{query}")
+                # 简单关键词匹配
+                query_keywords = query.lower().split()
+                paragraphs = text.split('\n')
+                relevant_parts = []
+                for para in paragraphs:
+                    if any(kw in para.lower() for kw in query_keywords):
+                        relevant_parts.append(para)
+
+                if relevant_parts:
+                    output.append("\n【相关内容】")
+                    output.append('\n'.join(relevant_parts[:10]))
+                else:
+                    output.append("\n【文档全文】")
+                    output.append(text[:3000])
+            else:
+                # 无查询，返回全文
+                output.append("\n【文档全文】")
+                output.append(text[:5000])
+
+            if len(text) > 5000:
+                output.append(f"\n... (共 {len(text)} 字符，已截断)")
+
             return "\n".join(output)
-        
+
+        # ===== 中长文档处理 =====
+        # 分块
+        chunks = processor.chunk_text(text)
+        print(f"✅ 分块完成，共 {len(chunks)} 块")
+
+        # 如果没有查询，返回文档总结
+        if not query:
+            output = [
+                f"📄 实时文档分析（中长文档模式）",
+                f"文档: {source_path.name}",
+                f"长度: {len(text)} 字符",
+                f"分块: {len(chunks)} 块",
+                "=" * 50,
+                "\n【文档开头】",
+                text[:2000],
+                f"\n... (共 {len(text)} 字符)",
+                "\n💡 提示：如需查询特定内容，请提供查询关键词"
+            ]
+            return "\n".join(output)
+
+        # 有查询，建立临时索引并检索
+        print(f"🔍 建立临时索引并检索: {query}")
+
+        # 临时索引
+        temp_entities = []
+        temp_docs = []
+
+        for i, chunk in enumerate(chunks):
+            try:
+                # 抽取实体
+                entities, _ = _entity_extractor.extract(
+                    chunk,
+                    use_llm=_use_llm,
+                    llm_client=_llm_client,
+                    top_k=10
+                )
+
+                temp_entities.extend(entities)
+                temp_docs.append({
+                    "content": chunk,
+                    "index": i,
+                    "entities": entities
+                })
+            except Exception as e:
+                print(f"  ⚠️ 处理第 {i+1} 块时出错: {e}")
+                continue
+
+        print(f"✅ 临时索引完成，实体: {len(temp_entities)}")
+
+        # 检索
+        query_entities = _entity_extractor.extract_from_query(query)
+        query_entity_names = {e['name'] for e in query_entities}
+
+        results = []
+        for doc in temp_docs:
+            doc_entity_names = {e.name for e in doc['entities']}
+            overlap = query_entity_names & doc_entity_names
+            if overlap:
+                results.append({
+                    "content": doc['content'],
+                    "score": len(overlap),
+                    "source": f"块 {doc['index']}"
+                })
+
+        # 按分数排序
+        results.sort(key=lambda x: x['score'], reverse=True)
+        results = results[:5]
+
+        # 格式化结果
+        if not results:
+            return f"🔍 未找到与 '{query}' 相关的内容\n   文档已处理: {len(chunks)} 块, {len(temp_entities)} 实体"
+
+        output = [
+            f"🔍 实时检索结果 ({len(results)} 条)",
+            f"文档: {source_path.name}",
+            f"查询: {query}",
+            f"处理: {len(chunks)} 块, {len(temp_entities)} 实体",
+            "=" * 50
+        ]
+
+        for i, doc in enumerate(results, 1):
+            content = doc.get("content", "")[:500]
+            source = doc.get("source", "未知")
+            output.append(f"\n[{i}] 来源: {source}")
+            output.append(f"    {content}...")
+
+        return "\n".join(output)
+
     except Exception as e:
-        return f"❌ 实时检索失败: {str(e)}"
+        return f"❌ 实时分析失败: {str(e)}"
 
 
 @tool
@@ -798,6 +1059,7 @@ def add_text_and_search(text: str, query: str, n_results: int = 5) -> str:
     实时模式：直接粘贴文本并检索
     
     无需提前索引，直接粘贴文本即可检索。
+    短文本直接返回全文，长文本走检索流程。
     适用于临时文本分析场景。
     
     Args:
@@ -814,7 +1076,25 @@ def add_text_and_search(text: str, query: str, n_results: int = 5) -> str:
     try:
         import tempfile
         
-        # 1. 实时处理文本
+        # 1. 判断是否为短文本，直接返回全文
+        if should_use_full_text(len(text)):
+            threshold = get_full_text_threshold()
+            print(f"📄 短文本检测（{len(text)} < {threshold} 字符），直接返回全文")
+            
+            output = [
+                f"📄 实时文本分析（短文本模式）",
+                f"长度: {len(text)} 字符",
+                "=" * 50,
+                "\n【文本全文】",
+                text[:3000]
+            ]
+            
+            if len(text) > 3000:
+                output.append(f"\n... (共 {len(text)} 字符)")
+            
+            return "\n".join(output)
+        
+        # 2. 长文本：实时处理
         try:
             embedding_model = _graph_service.embedding_model if _graph_service else None
             processor = DocumentProcessor.from_model_name(embedding_model) if embedding_model else DocumentProcessor()
@@ -896,10 +1176,10 @@ def add_text_and_search(text: str, query: str, n_results: int = 5) -> str:
 
 # 工具列表
 graphrag_tools = [
-    upload_document,  # 新增：上传文档到知识库
+    upload_document,             # 上传文档到知识库（长期保存）
+    analyze_document,            # 实时分析文档（一次性查询）
     add_document,
     add_text,
-    add_and_search,              # 实时模式：添加并检索文档
     add_text_and_search,         # 实时模式：添加文本并检索
     generate_ontology,
     query_graph_stats,

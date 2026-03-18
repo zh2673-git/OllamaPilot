@@ -30,7 +30,7 @@ from skills.graphrag.tools import (
     upload_document,
     add_document,
     add_text,
-    add_and_search,
+    analyze_document,
     add_text_and_search,
     query_graph_stats,
     search_all_documents,
@@ -94,7 +94,8 @@ class GraphRAGSkill(Skill):
         knowledge_base_dir: Optional[str] = None,
         enable_word_aligner: Optional[bool] = None,
         fuzzy_threshold: Optional[float] = None,
-        use_config: bool = True
+        use_config: bool = True,
+        model_name: Optional[str] = None
     ):
         """
         初始化 GraphRAG Skill
@@ -107,8 +108,11 @@ class GraphRAGSkill(Skill):
             enable_word_aligner: 是否启用 WordAligner，默认从 .env 读取
             fuzzy_threshold: 模糊匹配阈值，默认从 .env 读取
             use_config: 是否使用配置文件
+            model_name: 主模型名称（用于动态上下文判断）
         """
         super().__init__()
+        
+        self.model_name = model_name
         
         # 从配置文件获取默认值
         if use_config:
@@ -164,7 +168,10 @@ class GraphRAGSkill(Skill):
             init_graphrag_services(
                 self.graph_service,
                 self.entity_extractor,
-                doc_manager=self.document_manager
+                kb_dir="./data/knowledge_base",
+                temp_dir="./data/temp_documents",
+                doc_manager=self.document_manager,
+                model_name=self.model_name or self.embedding_model
             )
 
             # 创建中间件（如果启用自动检索）
@@ -331,7 +338,7 @@ class GraphRAGSkill(Skill):
             upload_document,  # 上传文档到知识库（推荐）
             add_document,     # 添加文档到知识图谱（不复制到知识库）
             add_text,
-            add_and_search,        # 实时模式：添加并检索文档
+            analyze_document,      # 实时分析文档（一次性查询）
             add_text_and_search,   # 实时模式：添加文本并检索
             query_graph_stats,
             search_all_documents,  # 全局搜索所有文档
@@ -352,26 +359,45 @@ class GraphRAGSkill(Skill):
 
 ## 可用工具（只能使用以下工具）
 
-1. **upload_document(file_path)** - 上传文档到知识库（最常用）
+### 知识库管理工具（长期保存）
+1. **upload_document(file_path)** - 上传文档到知识库
    - 自动复制文件到 knowledge_base/ 目录
-   - 自动分块、抽取实体、建立索引
-   - 当用户提供文件路径时，必须立即使用此工具
+   - 自动分块、抽取实体、建立完整索引
+   - 适用于：用户明确要求"添加到知识库"、"建立索引"
+   - 所有文档（无论长短）都会建立完整索引
 
-2. **add_document(file_path)** - 添加文档到知识图谱（不复制到知识库）
-   - 仅建立索引，不保存到知识库目录
-   - 适用于临时文档
+### 实时分析工具（一次性查询）
+2. **analyze_document(file_path, query=None)** - 实时分析文档内容
+   - 短文档（<阈值）：直接返回全文
+   - 中长文档（>=阈值）：建立临时索引并检索
+   - 适用于：用户说"分析一下这个文档"、"总结文档内容"
+   - 不长期保存，临时处理
 
-3. **add_text(text, source)** - 添加文本片段
-4. **search_all_documents(query)** - 全局搜索所有文档（用户没说分类时用）
-5. **search_in_category(category, query)** - 在指定分类中搜索（用户说了分类名称时用）
-6. **list_knowledge_categories()** - 列出所有知识库分类
-7. **query_graph_stats()** - 查看图谱统计
-8. **list_entities(entity_type)** - 列出实体
-9. **get_entity_relations(entity_name)** - 查看实体关系
+### 其他工具
+3. **add_document(file_path)** - 添加文档到知识图谱（不复制到知识库）
+4. **add_text(text, source)** - 添加文本片段
+5. **search_all_documents(query)** - 全局搜索所有文档
+6. **search_in_category(category, query)** - 在指定分类中搜索
+7. **list_knowledge_categories()** - 列出所有知识库分类
+8. **query_graph_stats()** - 查看图谱统计
+9. **list_entities(entity_type)** - 列出实体
+10. **get_entity_relations(entity_name)** - 查看实体关系
 
 ## 核心规则
 
-**当用户提供文件路径时，必须立即调用 upload_document(file_path)，不要执行其他操作。**
+**根据用户意图选择正确的工具：**
+
+1. **用户说"分析/总结/查看文档"** → 使用 `analyze_document`
+   ```
+   用户：分析一下 D:\文档\报告.pdf
+   → 调用：analyze_document("D:\\文档\\报告.pdf")
+   ```
+
+2. **用户说"添加到知识库/建立索引"** → 使用 `upload_document`
+   ```
+   用户：把 D:\文档\伤寒论.pdf 添加到知识库
+   → 调用：upload_document("D:\\文档\\伤寒论.pdf")
+   ```
 
 正确示例：
 ```
