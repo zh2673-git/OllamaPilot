@@ -589,16 +589,8 @@ class QQChannel(Channel):
 
         print(f"📨 [QQ单聊] {user_name}({user_id}): {content[:50]}...")
 
-        # 创建消息对象
-        message = ChannelMessage(
-            message_id=msg_id,
-            user_id=user_id,
-            user_name=user_name,
-            content=content,
-            message_type="private",
-            channel_name="qq",
-            raw_data=d
-        )
+        # 使用 _parse_message 解析消息（包括附件）
+        message = self._parse_message(d, "private")
 
         # 检查白名单
         if not self.check_permission(user_id):
@@ -649,17 +641,8 @@ class QQChannel(Channel):
             print(f"⛔ 用户 {user_id} 不在白名单中")
             return
 
-        # 创建消息对象
-        message = ChannelMessage(
-            message_id=msg_id,
-            user_id=user_id,
-            user_name=user_name,
-            content=content,
-            message_type="group",
-            channel_name="qq",
-            group_id=group_id,
-            raw_data=d
-        )
+        # 使用 _parse_message 解析消息（包括附件）
+        message = self._parse_message(d, "group", group_id=group_id)
 
         # 处理消息
         try:
@@ -744,21 +727,31 @@ class QQChannel(Channel):
         files = []
         attachments = data.get("attachments", [])
 
+        print(f"📎 [QQ] 消息附件数量: {len(attachments)}")
+
         for att in attachments:
             content_type = att.get("content_type", "")
+            filename = att.get("filename", "unknown")
+            print(f"📎 [QQ] 附件: {filename}, 类型: {content_type}")
+
             if content_type.startswith("image/"):
                 images.append(att.get("url", ""))
+                print(f"🖼️ [QQ] 识别为图片")
             else:
                 # 其他文件类型
                 files.append({
                     'url': att.get("url", ""),
-                    'filename': att.get("filename", "unknown"),
+                    'filename': filename,
                     'content_type': content_type,
                     'size': att.get("size", 0)
                 })
+                print(f"📄 [QQ] 识别为文件")
 
         # 将文件信息存入 raw_data
         data['files'] = files
+
+        if images or files:
+            print(f"✅ [QQ] 共识别: {len(images)} 个图片, {len(files)} 个文件")
 
         return ChannelMessage(
             message_id=str(data.get("id", "")),
