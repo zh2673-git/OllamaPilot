@@ -147,6 +147,38 @@ class ChannelRunner:
                 "verbose": verbose
             }
 
+            # 预热：创建一个临时 Agent 来加载所有 Skill（避免用户首次消息时等待）
+            logger.info("🔥 正在预热 Agent（提前加载 Skill）...")
+            try:
+                from ollamapilot import OllamaPilotAgent
+                from ollamapilot.infra.checkpoint import CheckpointManager
+                import threading
+
+                def _warmup():
+                    """后台预热"""
+                    try:
+                        # 使用临时 checkpointer
+                        temp_checkpointer = CheckpointManager("./data/temp_warmup")
+                        temp_agent = OllamaPilotAgent(
+                            model=model,
+                            skills_dir=skills_dir,
+                            verbose=False,  # 预热时减少日志
+                            enable_memory=False,  # 预热不需要记忆
+                            checkpointer=temp_checkpointer._saver
+                        )
+                        # 保存工具列表供后续使用
+                        self._warmup_tools = temp_agent.all_tools
+                        logger.info(f"✅ Agent 预热完成，已加载 {len(self._warmup_tools)} 个工具")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Agent 预热失败（不影响使用）: {e}")
+
+                # 后台线程预热，不阻塞启动
+                warmup_thread = threading.Thread(target=_warmup, daemon=True)
+                warmup_thread.start()
+
+            except Exception as e:
+                logger.warning(f"⚠️ 预热线程启动失败: {e}")
+
             logger.info("✅ Agent 模板初始化完成（每个用户独立）")
 
         except ImportError as e:
