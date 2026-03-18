@@ -122,35 +122,46 @@ class FileProcessor:
         except ImportError:
             return "[需要安装 pandas: pip install pandas openpyxl]"
 
-    async def analyze_image(self, image_path: Path, query: str = "描述这张图片的内容", model=None) -> str:
+    async def analyze_image(self, image_path: Path, query: str = "描述这张图片的内容", model_name: str = "qwen3.5:4b") -> str:
         """分析图片内容（使用多模态模型）"""
-        if not model:
-            # 尝试使用OCR作为备选
-            return await self._ocr_image(image_path)
-
         try:
-            # 使用支持视觉的模型
-            from ollamapilot import init_ollama_model
-
             # 读取图片为base64
             import base64
             with open(image_path, 'rb') as f:
                 image_base64 = base64.b64encode(f.read()).decode('utf-8')
 
-            # 构建多模态提示
-            messages = [
-                {
-                    "role": "user",
-                    "content": query,
-                    "images": [image_base64]
-                }
-            ]
+            # 使用 Ollama API 直接调用视觉模型
+            import aiohttp
 
-            # 调用视觉模型
-            response = model.invoke(messages)
-            return response.content if hasattr(response, 'content') else str(response)
+            # 构建 Ollama 多模态请求
+            payload = {
+                "model": model_name,  # 使用配置的视觉模型
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": query,
+                        "images": [image_base64]
+                    }
+                ],
+                "stream": False
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "http://localhost:11434/api/chat",
+                    json=payload
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        return result.get("message", {}).get("content", "[图片分析返回空]")
+                    else:
+                        error_text = await response.text()
+                        print(f"⚠️ 视觉模型调用失败: {error_text}")
+                        # 失败时回退到OCR
+                        return await self._ocr_image(image_path)
 
         except Exception as e:
+            print(f"⚠️ 图片分析失败: {e}")
             # 失败时回退到OCR
             return await self._ocr_image(image_path)
 

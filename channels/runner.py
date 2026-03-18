@@ -141,6 +141,7 @@ class ChannelRunner:
             model = init_ollama_model(model_name)
             # 不在这里创建 agent，改为每次消息时创建（使用用户特定的 checkpointer）
             self.model = model
+            self.model_name = model_name  # 保存模型名称用于图片分析
             self.agent_config = {
                 "skills_dir": skills_dir,
                 "verbose": verbose
@@ -320,18 +321,13 @@ class ChannelRunner:
                     )
 
                     logger.info(f"🖼️  分析图片 {i+1}")
-                    # 获取用户的agent用于图片分析
-                    cache_key = f"{message.channel_name}:{message.user_id}"
-                    if hasattr(self, '_user_agents') and cache_key in self._user_agents:
-                        agent = self._user_agents[cache_key]
-                        model = agent.model if hasattr(agent, 'model') else None
-                    else:
-                        model = None
+                    # 获取模型名称用于图片分析
+                    model_name = getattr(self, 'model_name', 'qwen3.5:4b')
 
                     description = await processor.analyze_image(
                         image_path,
                         query=message.content or "描述这张图片的内容",
-                        model=model
+                        model_name=model_name
                     )
                     contents.append(f"🖼️  图片 {i+1}:\n{description}")
 
