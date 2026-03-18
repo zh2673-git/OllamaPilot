@@ -124,7 +124,7 @@ class ChannelRunner:
         return config
     
     def _init_agent(self):
-        """初始化 OllamaPilot Agent（Channels 使用用户级 SQLite 持久化）"""
+        """初始化 OllamaPilot Agent（单用户模式，启动时直接创建）"""
         try:
             from ollamapilot import init_ollama_model, OllamaPilotAgent
 
@@ -136,50 +136,23 @@ class ChannelRunner:
             logger.info(f"🤖 正在初始化 Agent...")
             logger.info(f"   模型: {model_name}")
             logger.info(f"   Skills 目录: {skills_dir}")
-            logger.info(f"   记忆模式: 用户级 SQLite 持久化（Channels 专用）")
+            logger.info(f"   记忆模式: 单用户全局 Agent（启动时加载）")
 
             model = init_ollama_model(model_name)
-            # 不在这里创建 agent，改为每次消息时创建（使用用户特定的 checkpointer）
             self.model = model
             self.model_name = model_name  # 保存模型名称用于图片分析
-            self.agent_config = {
-                "skills_dir": skills_dir,
-                "verbose": verbose
-            }
 
-            # 预热：创建一个临时 Agent 来加载所有 Skill（避免用户首次消息时等待）
-            logger.info("🔥 正在预热 Agent（提前加载 Skill）...")
-            try:
-                from ollamapilot import OllamaPilotAgent
-                from langgraph.checkpoint.memory import MemorySaver
-                import threading
-
-                def _warmup():
-                    """后台预热"""
-                    try:
-                        # 使用内存 checkpointer（预热不需要持久化）
-                        temp_checkpointer = MemorySaver()
-                        temp_agent = OllamaPilotAgent(
-                            model=model,
-                            skills_dir=skills_dir,
-                            verbose=False,  # 预热时减少日志
-                            enable_memory=False,  # 预热不需要记忆
-                            checkpointer=temp_checkpointer
-                        )
-                        # 保存工具列表供后续使用
-                        self._warmup_tools = temp_agent.all_tools
-                        logger.info(f"✅ Agent 预热完成，已加载 {len(self._warmup_tools)} 个工具")
-                    except Exception as e:
-                        logger.warning(f"⚠️ Agent 预热失败（不影响使用）: {e}")
-
-                # 后台线程预热，不阻塞启动
-                warmup_thread = threading.Thread(target=_warmup, daemon=True)
-                warmup_thread.start()
-
-            except Exception as e:
-                logger.warning(f"⚠️ 预热线程启动失败: {e}")
-
-            logger.info("✅ Agent 模板初始化完成（每个用户独立）")
+            # 单用户模式：直接创建全局 Agent，所有消息共用
+            logger.info("🔥 正在加载 Agent（包含所有 Skill 和记忆）...")
+            checkpointer = self.session_manager.get_checkpointer("qq", "single_user")
+            self.agent = OllamaPilotAgent(
+                model=model,
+                skills_dir=skills_dir,
+                verbose=verbose,
+                enable_memory=True,
+                checkpointer=checkpointer
+            )
+            logger.info(f"✅ Agent 加载完成，已加载 {len(self.agent.all_tools)} 个工具")
 
         except ImportError as e:
             logger.error(f"❌ 导入 OllamaPilot 失败: {e}")
@@ -188,52 +161,14 @@ class ChannelRunner:
             logger.error(f"❌ 初始化 Agent 失败: {e}")
             raise
 
-    def _get_or_create_user_agent(self, channel: str, user_id: str) -> Any:
+    def _get_agent(self) -> Any:
         """
-        获取或创建用户专属的 Agent（带缓存）
-
-        每个用户有独立的 SQLite 数据库和 checkpointer
-        Agent 实例会被缓存，避免重复加载 Skill
-
-        Args:
-            channel: 渠道名称
-            user_id: 用户 ID
-
+        获取全局 Agent 实例（单用户模式）
+        
         Returns:
             OllamaPilotAgent 实例
         """
-        from ollamapilot import OllamaPilotAgent
-
-        # 构建缓存键
-        cache_key = f"{channel}:{user_id}"
-
-        # 检查缓存
-        if hasattr(self, '_user_agents') and cache_key in self._user_agents:
-            return self._user_agents[cache_key]
-
-        # 初始化缓存字典
-        if not hasattr(self, '_user_agents'):
-            self._user_agents = {}
-
-        # 获取用户的 checkpointer
-        checkpointer = self.session_manager.get_checkpointer(channel, user_id)
-
-        logger.info(f"🤖 为用户 {user_id} 创建新的 Agent 实例...")
-
-        # 创建用户专属的 Agent
-        agent = OllamaPilotAgent(
-            model=self.model,
-            skills_dir=self.agent_config["skills_dir"],
-            verbose=self.agent_config["verbose"],
-            enable_memory=True,
-            checkpointer=checkpointer  # 使用用户的持久化 checkpointer
-        )
-
-        # 缓存起来
-        self._user_agents[cache_key] = agent
-        logger.info(f"✅ 用户 {user_id} 的 Agent 已创建并缓存")
-
-        return agent
+        return self.agent
     
     def _init_channels(self):
         """初始化所有启用的渠道"""
@@ -407,7 +342,7 @@ class ChannelRunner:
 
     def _sync_invoke_with_prompt(self, message: ChannelMessage, prompt: str) -> str:
         """同步调用agent，使用自定义提示词"""
-        agent = self._get_or_create_user_agent(message.channel_name, message.user_id)
+        agent = self._get_agent()
         thread_id = f"{message.channel_name}_{message.user_id}_{message.message_type}"
 
         # 使用agent的invoke，但传入自定义提示
@@ -652,9 +587,9 @@ class ChannelRunner:
                     raise
 
     def _sync_invoke(self, message: ChannelMessage) -> str:
-        """同步调用 agent（在线程池中运行，每个用户独立）"""
-        # 获取或创建用户专属的 Agent（带缓存）
-        agent = self._get_or_create_user_agent(message.channel_name, message.user_id)
+        """同步调用 agent（在线程池中运行，单用户模式）"""
+        # 使用全局 Agent
+        agent = self._get_agent()
 
         thread_id = f"{message.channel_name}_{message.user_id}_{message.message_type}"
         return agent.invoke(query=message.content, thread_id=thread_id)
