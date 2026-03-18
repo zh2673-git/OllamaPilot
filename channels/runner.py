@@ -341,17 +341,22 @@ class ChannelRunner:
             if not contents:
                 return ChannelResponse(content="❌ 无法处理上传的文件/图片")
 
-            # 构建提示词
-            user_query = message.content or "请分析以上内容"
+            # 如果用户只上传文件/图片，没有输入问题，直接返回内容描述
+            user_query = message.content or ""
             full_content = "\n\n---\n\n".join(contents)
 
+            if not user_query.strip():
+                # 用户没有提问，直接返回文件/图片描述
+                return ChannelResponse(content=full_content)
+
+            # 用户有具体问题，才调用 AI 进行回答
             prompt = f"""用户上传了以下文件/图片，请根据内容回答用户问题：
 
 {full_content}
 
 用户问题: {user_query}
 
-请基于以上内容回答。如果用户没有具体问题，请总结主要内容。"""
+请基于以上内容回答。"""
 
             # 使用线程池调用agent
             loop = asyncio.get_event_loop()
