@@ -277,9 +277,51 @@ class QQChannel(Channel):
         rendered = self.renderer.render(content)
         message_content = rendered.content if rendered.content else content
 
-        # 构建消息数据
+        # QQ 消息长度限制（约2000字符）
+        MAX_LENGTH = 1800
+
+        # 如果消息太长，分段发送
+        if len(message_content) > MAX_LENGTH:
+            print(f"📨 消息长度 {len(message_content)} 超过限制，将分段发送")
+            parts = self._split_message(message_content, MAX_LENGTH)
+            success = True
+            for i, part in enumerate(parts):
+                print(f"📨 发送第 {i+1}/{len(parts)} 段消息")
+                part_success = await self._send_message_chunk(url, headers, part, msg_id if i == 0 else None)
+                if not part_success:
+                    success = False
+                # 添加短暂延迟避免触发频率限制
+                if i < len(parts) - 1:
+                    await asyncio.sleep(0.5)
+            return success
+        else:
+            return await self._send_message_chunk(url, headers, message_content, msg_id)
+
+    def _split_message(self, content: str, max_length: int) -> list:
+        """将长消息分割成多个部分"""
+        parts = []
+        while len(content) > max_length:
+            # 在换行符或句号处分割
+            split_pos = content.rfind('\n', 0, max_length)
+            if split_pos == -1:
+                split_pos = content.rfind('。', 0, max_length)
+            if split_pos == -1:
+                split_pos = content.rfind('. ', 0, max_length)
+            if split_pos == -1:
+                split_pos = max_length
+
+            parts.append(content[:split_pos])
+            content = content[split_pos:].strip()
+
+        if content:
+            parts.append(content)
+
+        return parts
+
+    async def _send_message_chunk(self, url: str, headers: dict, content: str, msg_id: str = None) -> bool:
+        """发送单条消息"""
         data = {
-            "content": message_content,
+            "content": content,
             "msg_type": 0,  # 文本消息
         }
 
@@ -289,28 +331,16 @@ class QQChannel(Channel):
         try:
             async with self.session.post(url, json=data, headers=headers) as resp:
                 if resp.status == 200:
-                    print(f"✅ 单聊消息已发送给 {user_id}")
                     return True
                 else:
                     text = await resp.text()
-                    print(f"⚠️ 发送单聊消息失败: {resp.status} - {text}")
+                    print(f"⚠️ 发送消息失败: {resp.status} - {text}")
                     # 处理内容违规错误(40034)
                     if resp.status == 400 and "40034" in text:
-                        print(f"   [ContentFilter] 消息内容被QQ平台拦截，尝试发送简化提示...")
-                        fallback_msg = "抱歉，回复内容包含敏感信息被平台拦截。请尝试询问其他话题。"
-                        fallback_data = {
-                            "content": fallback_msg,
-                            "msg_type": 0,
-                        }
-                        if msg_id:
-                            fallback_data["msg_id"] = msg_id
-                        async with self.session.post(url, json=fallback_data, headers=headers) as fallback_resp:
-                            if fallback_resp.status == 200:
-                                print(f"✅ 已发送简化提示给用户 {user_id}")
-                                return True
+                        print(f"   [ContentFilter] 消息内容被QQ平台拦截")
                     return False
         except Exception as e:
-            print(f"⚠️ 发送单聊消息异常: {e}")
+            print(f"⚠️ 发送消息异常: {e}")
             return False
 
     async def _send_group_message(self, group_id: str, content: str, msg_id: str = None) -> bool:
