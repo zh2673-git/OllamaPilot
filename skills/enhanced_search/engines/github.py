@@ -120,7 +120,7 @@ class GitHubSearchEngine(SearchEngineBase):
                     try:
                         dt = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
                         published_date = dt.strftime("%Y-%m-%d")
-                    except:
+                    except ValueError:
                         pass
                 
                 search_results.append(SearchResult(
@@ -273,9 +273,9 @@ class GiteeSearchEngine(SearchEngineBase):
                     try:
                         dt = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
                         published_date = dt.strftime("%Y-%m-%d")
-                    except:
+                    except ValueError:
                         pass
-                
+
                 search_results.append(SearchResult(
                     title=name,
                     url=url,

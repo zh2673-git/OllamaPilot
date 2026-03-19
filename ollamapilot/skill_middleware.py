@@ -5,6 +5,7 @@ Skill Middleware 模块
 保持 SKILL.md 配置方式，内部使用原生 Middleware 机制。
 """
 
+import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Sequence, Set
 from langchain.agents.middleware import AgentMiddleware
@@ -13,6 +14,10 @@ from langchain_core.messages import SystemMessage
 
 from ollamapilot.skills.base import Skill
 from ollamapilot.skills.loader import MarkdownSkill
+from ollamapilot.logging_config import get_default_logger
+
+get_default_logger()
+logger = logging.getLogger("ollamapilot.skill_middleware")
 
 
 # 内置工具白名单 - 始终允许使用
@@ -150,13 +155,13 @@ class ToolFilterMiddleware(AgentMiddleware):
             )
 
             if self.verbose:
-                print(f"🚫 阻止调用: {tool_name}")
+                logger.debug(f"阻止调用: {tool_name}")
 
             return error_msg
 
         # 允许调用
         if self.verbose:
-            print(f"✅ 允许调用: {tool_name}")
+            logger.debug(f"允许调用: {tool_name}")
 
         return handler(request)
 
@@ -188,13 +193,13 @@ class ToolFilterMiddleware(AgentMiddleware):
             )
 
             if self.verbose:
-                print(f"🚫 阻止调用: {tool_name}")
+                logger.debug(f"阻止调用: {tool_name}")
 
             return error_msg
 
         # 允许调用
         if self.verbose:
-            print(f"✅ 允许调用: {tool_name}")
+            logger.debug(f"允许调用: {tool_name}")
 
         # 异步调用 handler
         return await handler(request)
@@ -384,7 +389,7 @@ class SkillSelectorMiddleware(AgentMiddleware):
 
             # 打印 Skill 激活日志（包含工具数量）
             if self.verbose:
-                print(f"🎯 激活 Skill: {skill.name} ({total_tools}个工具可用)")
+                logger.info(f"激活 Skill: {skill.name} ({total_tools}个工具可用)")
 
             skill_prompt = skill.get_system_prompt()
             
@@ -533,11 +538,10 @@ class ToolLoggingMiddleware(AgentMiddleware):
             工具调用结果
         """
         if self.verbose:
-            # 从 request.tool_call 获取工具调用信息
             tool_call = getattr(request, "tool_call", {})
             tool_name = tool_call.get("name", "unknown") if isinstance(tool_call, dict) else getattr(tool_call, "name", "unknown")
             tool_args = tool_call.get("args", {}) if isinstance(tool_call, dict) else getattr(tool_call, "args", {})
-            print(f"🔧 执行工具: {tool_name}({tool_args})")
+            logger.info(f"执行工具: {tool_name}({tool_args})")
 
         # 异步调用 handler
         result = await handler(request)
@@ -546,7 +550,7 @@ class ToolLoggingMiddleware(AgentMiddleware):
             result_preview = str(result)[:200]
             if len(str(result)) > 200:
                 result_preview += "..."
-            print(f"   ✅ 结果: {result_preview}")
+            logger.debug(f"结果: {result_preview}")
 
         return result
 
@@ -562,11 +566,10 @@ class ToolLoggingMiddleware(AgentMiddleware):
             工具调用结果
         """
         if self.verbose:
-            # 从 request.tool_call 获取工具调用信息
             tool_call = getattr(request, "tool_call", {})
             tool_name = tool_call.get("name", "unknown") if isinstance(tool_call, dict) else getattr(tool_call, "name", "unknown")
             tool_args = tool_call.get("args", {}) if isinstance(tool_call, dict) else getattr(tool_call, "args", {})
-            print(f"🔧 执行工具: {tool_name}({tool_args})")
+            logger.info(f"执行工具: {tool_name}({tool_args})")
 
         result = handler(request)
 
@@ -574,7 +577,7 @@ class ToolLoggingMiddleware(AgentMiddleware):
             result_preview = str(result)[:200]
             if len(str(result)) > 200:
                 result_preview += "..."
-            print(f"   ✅ 结果: {result_preview}")
+            logger.debug(f"结果: {result_preview}")
 
         return result
 

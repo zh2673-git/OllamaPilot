@@ -134,7 +134,7 @@ class ArXivSearchEngine(SearchEngineBase):
                     try:
                         dt = datetime.fromisoformat(published_elem.text.replace("Z", "+00:00"))
                         published_date = dt.strftime("%Y-%m-%d")
-                    except:
+                    except ValueError:
                         pass
                 
                 # 获取 PDF 链接
@@ -244,9 +244,9 @@ class ArXivSearchEngine(SearchEngineBase):
                     try:
                         dt = datetime.fromisoformat(published_elem.text.replace("Z", "+00:00"))
                         published_date = dt.strftime("%Y-%m-%d")
-                    except:
+                    except ValueError:
                         pass
-                
+
                 pdf_url = ""
                 for link in entry.findall("atom:link", ns):
                     if link.get("title") == "pdf":

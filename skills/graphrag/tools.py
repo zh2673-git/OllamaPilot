@@ -4,6 +4,7 @@ GraphRAG 工具集
 提供知识图谱相关的工具函数。
 """
 
+import logging
 from typing import Optional, List, Dict, Any
 from langchain_core.tools import tool
 from pathlib import Path
@@ -15,6 +16,8 @@ from skills.graphrag.services import (
 )
 from skills.graphrag.llm_client import SimpleLLMClient
 from skills.graphrag.utils import DocumentProcessor
+
+logger = logging.getLogger("ollamapilot.skills.graphrag.tools")
 
 
 # 全局服务实例（由 Agent 初始化时注入）
@@ -214,16 +217,16 @@ def upload_document(
         if not source_path.exists():
             similar_file = _find_similar_file(file_path)
             if similar_file:
-                print(f"🔍 文件名模糊匹配: '{file_path}' -> '{similar_file}'")
+                logger.info(f"文件名模糊匹配: '{file_path}' -> '{similar_file}'")
                 source_path = Path(similar_file)
                 file_path = similar_file
             else:
-                return f"❌ 文件不存在: {file_path}"
+                return f"文件不存在: {file_path}"
 
         # 检查文件类型
         supported_ext = {'.txt', '.md', '.pdf', '.docx', '.doc'}
         if source_path.suffix.lower() not in supported_ext:
-            return f"❌ 不支持的文件类型: {source_path.suffix}，支持的类型: {', '.join(supported_ext)}"
+            return f"不支持的文件类型: {source_path.suffix}，支持的类型: {', '.join(supported_ext)}"
 
         # 知识库文档保存到知识库目录
         save_dir = Path(_knowledge_base_dir)
@@ -246,14 +249,13 @@ def upload_document(
             # 复制文件
             import shutil
             shutil.copy2(source_path, dest_path)
-            print(f"📁 已保存到知识库: {dest_path}")
+            logger.info(f"已保存到知识库: {dest_path}")
 
             # 使用新路径继续处理
             file_path = str(dest_path)
 
         # 读取文档
-        print(f"📖 正在读取文档: {Path(file_path).name}")
-        # 根据当前 embedding 模型动态选择分块大小
+        logger.debug(f"正在读取文档: {Path(file_path).name}")
         try:
             embedding_model = _graph_service.embedding_model if _graph_service else None
             processor = DocumentProcessor.from_model_name(embedding_model) if embedding_model else DocumentProcessor()
@@ -262,18 +264,18 @@ def upload_document(
         text = processor.read_document(file_path)
 
         if not text:
-            return f"❌ 无法读取文档内容: {file_path}"
+            return f"无法读取文档内容: {file_path}"
 
-        print(f"✅ 文档读取完成，长度: {len(text)} 字符")
-        print(f"🔄 知识库模式：建立完整索引（文档长度: {len(text)} 字符）")
+        logger.debug(f"文档读取完成，长度: {len(text)} 字符")
+        logger.info(f"知识库模式：建立完整索引（文档长度: {len(text)} 字符）")
 
         # 长文档：正常索引流程
-        print("🔄 正在分块...")
+        logger.debug("正在分块...")
         chunks = processor.chunk_text(text)
-        print(f"✅ 分块完成，共 {len(chunks)} 块")
+        logger.info(f"分块完成，共 {len(chunks)} 块")
 
         # 处理每个块
-        print(f"🔄 正在处理 {len(chunks)} 个块...")
+        logger.debug(f"正在处理 {len(chunks)} 个块...")
         total_entities = 0
         total_relations = 0
         for i, chunk in enumerate(chunks):
@@ -314,17 +316,17 @@ def upload_document(
                 total_relations += len(relations)
 
                 if (i + 1) % 10 == 0:
-                    print(f"  已处理 {i + 1}/{len(chunks)} 块...")
+                    logger.debug(f"已处理 {i + 1}/{len(chunks)} 块...")
 
             except Exception as e:
-                print(f"  ⚠️ 处理第 {i+1} 块时出错: {e}")
+                logger.warning(f"处理第 {i+1} 块时出错: {e}")
                 continue
 
-        print(f"✅ 所有块处理完成")
+        logger.info("所有块处理完成")
 
         stats = _graph_service.get_stats()
-        dest_info = f"📁 已保存到知识库: {Path(file_path).name}\n" if save_to_knowledge_base else ""
-        return f"""✅ 文档上传完成！
+        dest_info = f"已保存到知识库: {Path(file_path).name}\n" if save_to_knowledge_base else ""
+        return f"""文档上传完成！
 {dest_info}- 文件：{Path(file_path).name}
 - 文档长度：{len(text)} 字符
 - 分块数：{len(chunks)}
@@ -335,7 +337,7 @@ def upload_document(
 现在可以直接询问与该文档相关的问题了。"""
 
     except Exception as e:
-        return f"❌ 上传失败：{str(e)}"
+        return f"上传失败：{str(e)}"
 
 
 @tool
@@ -883,15 +885,14 @@ def analyze_document(file_path: str, query: Optional[str] = None) -> str:
 
         source_path = Path(file_path)
 
-        # 文件不存在时尝试模糊匹配
         if not source_path.exists():
             similar_file = _find_similar_file(file_path)
             if similar_file:
-                print(f"🔍 文件名模糊匹配: '{file_path}' -> '{similar_file}'")
+                logger.info(f"文件名模糊匹配: '{file_path}' -> '{similar_file}'")
                 source_path = Path(similar_file)
                 file_path = similar_file
             else:
-                return f"❌ 文件不存在: {file_path}"
+                return f"文件不存在: {file_path}"
 
         # 保存到临时目录
         temp_dir = Path(_temp_documents_dir)
@@ -904,9 +905,9 @@ def analyze_document(file_path: str, query: Optional[str] = None) -> str:
 
         # 复制文件到临时目录
         shutil.copy2(source_path, temp_file_path)
-        print(f"📂 已保存到临时文档: {temp_file_path}")
+        logger.info(f"已保存到临时文档: {temp_file_path}")
 
-        print(f"🔄 实时分析文档: {source_path.name}")
+        logger.debug(f"实时分析文档: {source_path.name}")
 
         # 1. 读取文档
         try:
@@ -917,14 +918,14 @@ def analyze_document(file_path: str, query: Optional[str] = None) -> str:
 
         text = processor.read_document(file_path)
         if not text:
-            return f"❌ 无法读取文档内容: {file_path}"
+            return f"无法读取文档内容: {file_path}"
 
-        print(f"✅ 文档读取完成，长度: {len(text)} 字符")
+        logger.debug(f"文档读取完成，长度: {len(text)} 字符")
 
         # 2. 判断是否为短文档，直接返回全文
         if should_use_full_text(len(text)):
             threshold = get_full_text_threshold()
-            print(f"📄 短文档检测（{len(text)} < {threshold} 字符），直接返回全文")
+            logger.debug(f"短文档检测（{len(text)} < {threshold} 字符），直接返回全文")
 
             # 短文档直接返回全文
             output = [
@@ -964,7 +965,7 @@ def analyze_document(file_path: str, query: Optional[str] = None) -> str:
         # ===== 中长文档处理 =====
         # 分块
         chunks = processor.chunk_text(text)
-        print(f"✅ 分块完成，共 {len(chunks)} 块")
+        logger.info(f"分块完成，共 {len(chunks)} 块")
 
         # 如果没有查询，返回文档总结
         if not query:
@@ -982,7 +983,7 @@ def analyze_document(file_path: str, query: Optional[str] = None) -> str:
             return "\n".join(output)
 
         # 有查询，建立临时索引并检索
-        print(f"🔍 建立临时索引并检索: {query}")
+        logger.info(f"建立临时索引并检索: {query}")
 
         # 临时索引
         temp_entities = []
@@ -1005,10 +1006,10 @@ def analyze_document(file_path: str, query: Optional[str] = None) -> str:
                     "entities": entities
                 })
             except Exception as e:
-                print(f"  ⚠️ 处理第 {i+1} 块时出错: {e}")
+                logger.warning(f"处理第 {i+1} 块时出错: {e}")
                 continue
 
-        print(f"✅ 临时索引完成，实体: {len(temp_entities)}")
+        logger.info(f"临时索引完成，实体: {len(temp_entities)}")
 
         # 检索
         query_entities = _entity_extractor.extract_from_query(query)
@@ -1071,15 +1072,15 @@ def add_text_and_search(text: str, query: str, n_results: int = 5) -> str:
         检索结果
     """
     if not _graph_service or not _entity_extractor:
-        return "❌ 服务未初始化"
-    
+        return "服务未初始化"
+
     try:
         import tempfile
-        
+
         # 1. 判断是否为短文本，直接返回全文
         if should_use_full_text(len(text)):
             threshold = get_full_text_threshold()
-            print(f"📄 短文本检测（{len(text)} < {threshold} 字符），直接返回全文")
+            logger.debug(f"短文本检测（{len(text)} < {threshold} 字符），直接返回全文")
             
             output = [
                 f"📄 实时文本分析（短文本模式）",
@@ -1100,15 +1101,15 @@ def add_text_and_search(text: str, query: str, n_results: int = 5) -> str:
             processor = DocumentProcessor.from_model_name(embedding_model) if embedding_model else DocumentProcessor()
         except Exception:
             processor = DocumentProcessor()
-        
+
         # 分块
         chunks = processor.chunk_text(text)
-        print(f"✅ 文本分块完成，共 {len(chunks)} 块")
-        
+        logger.info(f"文本分块完成，共 {len(chunks)} 块")
+
         # 2. 临时索引
         temp_entities = []
         temp_docs = []
-        
+
         for i, chunk in enumerate(chunks):
             try:
                 entities, _ = _entity_extractor.extract(
@@ -1117,7 +1118,7 @@ def add_text_and_search(text: str, query: str, n_results: int = 5) -> str:
                     llm_client=_llm_client,
                     top_k=20
                 )
-                
+
                 temp_entities.extend(entities)
                 temp_docs.append({
                     "content": chunk,
@@ -1125,10 +1126,10 @@ def add_text_and_search(text: str, query: str, n_results: int = 5) -> str:
                     "entities": entities
                 })
             except Exception as e:
-                print(f"  ⚠️ 处理第 {i+1} 块时出错: {e}")
+                logger.warning(f"处理第 {i+1} 块时出错: {e}")
                 continue
         
-        print(f"✅ 临时索引完成，实体: {len(temp_entities)}")
+        logger.info(f"临时索引完成，实体: {len(temp_entities)}")
         
         # 3. 立即检索
         query_entities = _entity_extractor.extract_from_query(query)

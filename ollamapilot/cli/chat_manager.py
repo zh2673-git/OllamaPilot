@@ -10,15 +10,13 @@ import glob
 import time
 import asyncio
 import threading
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
-
-# 添加项目根目录到路径
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from ollamapilot import (
     init_ollama_model,
@@ -32,6 +30,10 @@ from ollamapilot.config import get_config, reload_config
 from .session import Session
 from .session_store import SessionStore
 from .completer import CommandCompleter, HAS_READLINE
+from ollamapilot.logging_config import get_default_logger
+
+get_default_logger()
+logger = logging.getLogger("ollamapilot.cli.chat")
 
 
 class OllamaPilotChat:
@@ -106,20 +108,20 @@ class OllamaPilotChat:
                             try:
                                 num = int(session_id.split("_")[1])
                                 self.session_counter = max(self.session_counter, num)
-                            except:
+                            except (ValueError, IndexError):
                                 pass
                 
                 db_count = len([s for s in restored_sessions.values() if s.is_from_database])
                 if db_count > 0:
-                    print(f"📦 已从数据库恢复 {db_count} 个历史会话")
-                    
+                    logger.info(f"已从数据库恢复 {db_count} 个历史会话")
+
         except Exception as e:
-            print(f"⚠️  恢复会话失败: {e}")
+            logger.warning(f"恢复会话失败: {e}")
     
     def _setup_autocomplete(self):
         """设置命令自动补全"""
         if self.completer.setup():
-            print("✅ 命令自动补全已启用（按 Tab 键）")
+            logger.debug("命令自动补全已启用（按 Tab 键）")
     
     def _get_files_in_directory(self, dir_path: str) -> List[str]:
         """获取目录中所有支持的文档文件"""

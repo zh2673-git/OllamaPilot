@@ -688,7 +688,7 @@ class HybridEntityExtractor:
             if json_match:
                 try:
                     return json.loads(json_match.group())
-                except:
+                except json.JSONDecodeError:
                     pass
             return {"entities": [], "relations": []}
 

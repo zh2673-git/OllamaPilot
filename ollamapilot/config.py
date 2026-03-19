@@ -8,6 +8,10 @@ import os
 from typing import Optional
 from pathlib import Path
 
+from ollamapilot.logging_config import get_logger
+
+logger = get_logger("config")
+
 
 class Config:
     """配置类"""
@@ -33,8 +37,8 @@ class Config:
     def _load_env_file(self):
         """从 .env 文件加载配置"""
         if not self.env_file.exists():
-            print(f"⚠️ 配置文件不存在: {self.env_file}")
-            print(f"   将使用默认配置")
+            logger.warning(f"配置文件不存在: {self.env_file}")
+            logger.warning("将使用默认配置")
             self._load_defaults()
             return
 
@@ -42,29 +46,25 @@ class Config:
             with open(self.env_file, 'r', encoding='utf-8') as f:
                 for line in f:
                     line = line.strip()
-                    # 跳过空行和注释
                     if not line or line.startswith('#'):
                         continue
 
-                    # 解析键值对
                     if '=' in line:
                         key, value = line.split('=', 1)
                         key = key.strip()
                         value = value.strip()
-                        # 移除引号
                         if value.startswith('"') and value.endswith('"'):
                             value = value[1:-1]
                         elif value.startswith("'") and value.endswith("'"):
                             value = value[1:-1]
                         self._config[key] = value
-                        # 同时设置到环境变量，供其他模块使用
                         if key not in os.environ:
                             os.environ[key] = value
 
-            print(f"✅ 已加载配置: {self.env_file}")
+            logger.info(f"已加载配置: {self.env_file}")
 
         except Exception as e:
-            print(f"⚠️ 加载配置文件失败: {e}")
+            logger.error(f"加载配置文件失败: {e}")
             self._load_defaults()
     
     def _load_defaults(self):
@@ -210,7 +210,7 @@ class Config:
         """重新加载配置"""
         self._config.clear()
         self._load_env_file()
-        print("✅ 配置已重新加载")
+        logger.info("配置已重新加载")
     
     def to_dict(self) -> dict:
         """导出为字典"""
@@ -231,13 +231,11 @@ class Config:
         }
     
     def print_config(self):
-        """打印当前配置"""
-        print("\n📋 当前配置:")
-        print("-" * 50)
+        """打印当前配置（用于调试）"""
+        logger.info("当前配置:")
         config_dict = self.to_dict()
         for key, value in config_dict.items():
-            print(f"  {key}: {value}")
-        print("-" * 50)
+            logger.info(f"  {key}: {value}")
 
 
 # 全局配置实例

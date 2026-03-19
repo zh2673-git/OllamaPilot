@@ -5,6 +5,7 @@
 支持从 Ollama API 获取模型信息，并根据模型能力和硬件配置动态调整配置。
 """
 
+import logging
 import requests
 import json
 import os
@@ -15,6 +16,10 @@ from typing import Optional, Dict, List, Union, Tuple
 from functools import lru_cache
 from pathlib import Path
 from datetime import datetime, timedelta
+
+from ollamapilot.logging_config import get_logger
+
+logger = get_logger("model_context")
 
 
 class ModelContextManager:
@@ -309,46 +314,40 @@ class ModelContextManager:
         """
         models = self.list_installed_models()
         results = {}
-        
+
         if verbose:
-            print(f"🔍 发现 {len(models)} 个已安装模型")
-            print("-" * 50)
-        
+            logger.info(f"发现 {len(models)} 个已安装模型")
+
         for model_name in models:
-            # 检查是否已有缓存
             if model_name in self._cache:
                 context_length = self._cache[model_name]
                 results[model_name] = context_length
                 if verbose:
-                    print(f"📦 {model_name}: {context_length:,} tokens (缓存)")
+                    logger.debug(f"{model_name}: {context_length:,} tokens (缓存)")
                 continue
-            
-            # 尝试从 Ollama API 获取
+
             try:
                 context_length = self._detect_from_api(model_name)
                 if context_length:
                     self._cache[model_name] = context_length
                     results[model_name] = context_length
                     if verbose:
-                        print(f"✅ {model_name}: {context_length:,} tokens (检测)")
+                        logger.info(f"{model_name}: {context_length:,} tokens (检测)")
                     continue
             except Exception as e:
                 if verbose:
-                    print(f"⚠️ {model_name}: API 检测失败 - {e}")
-            
-            # 使用默认值
+                    logger.warning(f"{model_name}: API 检测失败 - {e}")
+
             results[model_name] = 8192
             self._cache[model_name] = 8192
             if verbose:
-                print(f"⚠️ {model_name}: 8192 tokens (默认)")
-        
-        # 保存缓存
+                logger.warning(f"{model_name}: 8192 tokens (默认)")
+
         self._save_cache()
-        
+
         if verbose:
-            print("-" * 50)
-            print(f"✅ 扫描完成，已缓存 {len(results)} 个模型")
-        
+            logger.info(f"扫描完成，已缓存 {len(results)} 个模型")
+
         return results
     
     def _detect_from_api(self, model_name: str) -> Optional[int]:

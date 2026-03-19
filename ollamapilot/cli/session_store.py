@@ -50,41 +50,65 @@ class SessionStore:
         try:
             conn = self._get_conn()
             cursor = conn.cursor()
-            
-            # 查询所有不同的 thread_id 和最新的检查点时间
+
+            # 查询所有不同的 thread_id（不再尝试从 JSON 提取时间）
             cursor.execute("""
-                SELECT thread_id, MAX(datetime(json_extract(metadata, '$.timestamp'))) as last_time
+                SELECT thread_id, MAX(rowid) as max_rowid
                 FROM checkpoints
                 GROUP BY thread_id
             """)
-            
+
             rows = cursor.fetchall()
-            
+
             for row in rows:
                 thread_id = row[0]
-                last_time = row[1]
-                
+
                 # 统计消息数量（通过检查点数量估算）
                 cursor.execute("""
                     SELECT COUNT(*) FROM checkpoints WHERE thread_id = ?
                 """, (thread_id,))
                 checkpoint_count = cursor.fetchone()[0]
-                
-                # 尝试获取第一条消息的时间作为创建时间
+
+                # 尝试获取第一条消息的时间作为创建时间（先获取原始字符串，再在 Python 中解析）
                 cursor.execute("""
-                    SELECT datetime(json_extract(metadata, '$.timestamp'))
-                    FROM checkpoints 
+                    SELECT metadata FROM checkpoints
                     WHERE thread_id = ?
                     ORDER BY rowid ASC LIMIT 1
                 """, (thread_id,))
                 first_row = cursor.fetchone()
-                created_time = first_row[0] if first_row else last_time
-                
+
+                # 从原始 metadata 中安全提取 timestamp
+                created_time = None
+                if first_row and first_row[0]:
+                    try:
+                        import json
+                        meta = json.loads(first_row[0])
+                        created_time = meta.get("timestamp")
+                    except Exception:
+                        pass
+
+                # 获取最后一条消息的时间
+                cursor.execute("""
+                    SELECT metadata FROM checkpoints
+                    WHERE thread_id = ?
+                    ORDER BY rowid DESC LIMIT 1
+                """, (thread_id,))
+                last_row = cursor.fetchone()
+
+                last_time = None
+                if last_row and last_row[0]:
+                    try:
+                        import json
+                        meta = json.loads(last_row[0])
+                        last_time = meta.get("timestamp")
+                    except Exception:
+                        pass
+
                 # 解析时间
                 try:
                     updated_at = datetime.fromisoformat(last_time.replace('Z', '+00:00')) if last_time else datetime.now()
                     created_at = datetime.fromisoformat(created_time.replace('Z', '+00:00')) if created_time else datetime.now()
-                except:
+                except (ValueError, AttributeError):
                     updated_at = datetime.now()
                     created_at = datetime.now()
                 
@@ -177,68 +201,64 @@ class SessionStore:
             for row in rows:
                 checkpoint_blob = row[0]
                 metadata_blob = row[1]
-                
+
                 try:
-                    # 尝试解析 msgpack 格式
+                    # 尝试解析 pickle 格式（主要格式）
                     try:
-                        import msgpack
-                        checkpoint = msgpack.unpackb(checkpoint_blob, raw=False)
-                    except:
-                        # 回退到 JSON
-                        checkpoint = json.loads(checkpoint_blob)
-                    
-                    # 解析 metadata
-                    try:
-                        metadata = json.loads(metadata_blob) if metadata_blob else {}
-                    except:
-                        metadata = {}
-                    
+                        import pickle
+                        checkpoint = pickle.loads(checkpoint_blob)
+                    except Exception:
+                        # 回退到 msgpack 格式
+                        try:
+                            import msgpack
+                            checkpoint = msgpack.unpackb(checkpoint_blob, raw=False)
+                        except Exception:
+                            # 再回退到 JSON
+                            checkpoint = json.loads(checkpoint_blob)
+
+                    # 解析 metadata（可能是 pickle 或 JSON）
+                    metadata = {}
+                    if metadata_blob:
+                        try:
+                            metadata = pickle.loads(metadata_blob)
+                        except Exception:
+                            try:
+                                metadata = json.loads(metadata_blob)
+                            except Exception:
+                                pass
+
                     # 提取消息
                     channel_values = checkpoint.get("channel_values", {})
                     msgs = channel_values.get("messages", [])
-                    
+
                     for msg in msgs:
                         msg_data = None
-                        
-                        # 处理 msgpack ExtType (LangChain 消息对象)
-                        if hasattr(msg, 'code') and hasattr(msg, 'data'):
-                            # 这是 ExtType，尝试解析
-                            try:
-                                inner = msgpack.unpackb(msg.data, raw=False)
-                                # ExtType 解析后是列表: [module, class, data_dict, ...]
-                                if isinstance(inner, list) and len(inner) >= 3:
-                                    msg_data = inner[2]  # 消息数据在索引 2
-                                elif isinstance(inner, dict):
-                                    msg_data = inner
-                            except:
-                                continue
-                        elif isinstance(msg, dict):
-                            msg_data = msg
-                        
-                        # 提取消息内容
-                        if isinstance(msg_data, dict):
-                            msg_type = msg_data.get("type", "")
-                            content = msg_data.get("content", "")
-                            
-                            # 根据模块名推断类型
-                            if not msg_type and hasattr(msg, 'data'):
-                                try:
-                                    inner = msgpack.unpackb(msg.data, raw=False)
-                                    if isinstance(inner, list) and len(inner) >= 1:
-                                        module = inner[0]
-                                        if 'human' in module:
-                                            msg_type = 'human'
-                                        elif 'ai' in module or 'assistant' in module:
-                                            msg_type = 'ai'
-                                        elif 'system' in module:
-                                            msg_type = 'system'
-                                except:
-                                    pass
-                            
-                            if content and len(content) > 5:  # 过滤空消息
-                                messages.append({
-                                    "type": msg_type,
-                                    "content": content[:200] + "..." if len(content) > 200 else content,
+                        msg_type = ""
+                        content = ""
+
+                        # 直接获取 LangChain 消息对象的内容
+                        if hasattr(msg, 'content'):
+                            content = str(msg.content) if msg.content else ""
+                        if hasattr(msg, 'type'):
+                            msg_type = msg.type
+                        elif hasattr(msg, '__class__'):
+                            class_name = msg.__class__.__name__.lower()
+                            if 'human' in class_name:
+                                msg_type = 'human'
+                            elif 'ai' in class_name or 'assistant' in class_name:
+                                msg_type = 'ai'
+                            elif 'system' in class_name:
+                                msg_type = 'system'
+
+                        # 尝试从 dict 获取
+                        if isinstance(msg, dict):
+                            msg_type = msg.get("type", "") or msg_type
+                            content = str(msg.get("content", "")) or content
+
+                        if content and len(content) > 5:
+                            messages.append({
+                                "type": msg_type,
+                                "content": content[:200] + "..." if len(content) > 200 else content,
                                     "timestamp": metadata.get("timestamp", ""),
                                     "step": metadata.get("step", -1)
                                 })
