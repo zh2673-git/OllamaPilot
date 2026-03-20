@@ -89,6 +89,22 @@ class ContextBuilder:
         self._l3_cache_time: float = 0
         self._l3_cache_hash: str = ""
 
+        # 预加载的历史（按 thread_id 存储，支持多用户/多会话）
+        self._preloaded_history: Dict[str, List[Any]] = {}
+
+    def set_preloaded_history(self, history: List[Any], thread_id: str = "default"):
+        """设置预加载的历史（启动时调用）
+
+        Args:
+            history: 历史消息列表
+            thread_id: 会话/线程ID，用于区分不同用户的历史
+        """
+        self._preloaded_history[thread_id] = history or []
+
+    def get_preloaded_history(self, thread_id: str = "default") -> List[Any]:
+        """获取指定线程的预加载历史"""
+        return self._preloaded_history.get(thread_id, [])
+
     def build(
         self,
         query: str,
@@ -135,6 +151,7 @@ class ContextBuilder:
         working: bool = True,
         realtime: bool = True,
         memory: bool = True,
+        thread_id: str = "default",
     ) -> Context:
         """
         构建四层 Context（优化版本）
@@ -151,6 +168,7 @@ class ContextBuilder:
             working: 是否包含工作层
             realtime: 是否包含实时层
             memory: 是否包含记忆层
+            thread_id: 会话/线程ID，用于获取对应的历史
 
         Returns:
             Context 对象
@@ -167,7 +185,7 @@ class ContextBuilder:
             context.realtime = self._build_realtime_layer(query)
 
         if memory:
-            context.memory = self._build_memory_layer(query)
+            context.memory = self._build_memory_layer(query, thread_id=thread_id)
 
         return context
 
@@ -214,16 +232,12 @@ class ContextBuilder:
         self._l3_cache_hash = ""
 
     def _build_working_layer(self, history: List[Any]) -> str:
-        """L2: 工作层 - AGENTS.md + 对话历史"""
+        """L2: 工作层 - AGENTS.md + 当前任务上下文"""
         parts = []
 
         agents_path = self.workspace / "AGENTS.md"
         if agents_path.exists():
             parts.append(agents_path.read_text(encoding='utf-8'))
-
-        if history:
-            history_text = self._format_history(history)
-            parts.append(f"\n## 对话历史\n{history_text}")
 
         return "\n\n".join(parts)
 
@@ -257,24 +271,59 @@ class ContextBuilder:
 
         return time_info
 
-    def _build_memory_layer(self, query: str) -> str:
-        """L0: 记忆层 - 由 Context 统管"""
-        if not self.memory_manager:
-            return ""
+    def _build_memory_layer(self, query: str, thread_id: str = "default") -> str:
+        """L0: 记忆层 - 由 Context 统管
 
-        try:
-            memories = self.memory_manager.recall(query, top_k=5)
+        包含：
+        1. 对话历史（短期记忆）
+        2. MEMORY.md 主记忆文件（长期记忆摘要）
+        3. memory/*.md 记忆条目
+        4. 向量检索结果
 
-            if not memories:
-                return ""
+        Args:
+            query: 当前查询
+            thread_id: 会话/线程ID，用于获取对应的历史
+        """
+        parts = []
 
-            memory_parts = ["[相关记忆]"]
-            for mem in memories:
-                memory_parts.append(f"- {mem}")
+        # 1. 对话历史（短期记忆）- 优先使用预加载的历史（按 thread_id 获取）
+        history = self._preloaded_history.get(thread_id, [])
+        if history:
+            history_text = self._format_history(history)
+            parts.append(f"[对话历史]\n{history_text}")
 
-            return "\n".join(memory_parts)
-        except Exception:
-            return ""
+        # 2. 读取 MEMORY.md 主文件（长期记忆摘要）
+        memory_md_path = self.workspace / "MEMORY.md"
+        if memory_md_path.exists():
+            content = memory_md_path.read_text(encoding='utf-8')
+            # 提取实际记忆内容（跳过使用说明部分）
+            lines = content.split('\n')
+            memory_lines = []
+            in_memory_section = False
+            for line in lines:
+                if line.startswith('## ') and '使用说明' not in line and '格式' not in line:
+                    in_memory_section = True
+                    memory_lines.append(line)
+                elif in_memory_section:
+                    if line.startswith('## '):
+                        in_memory_section = False
+                    else:
+                        memory_lines.append(line)
+            if memory_lines:
+                parts.append("[系统记忆]\n" + '\n'.join(memory_lines))
+
+        # 3. 通过 MemoryManager 检索相关记忆
+        if self.memory_manager:
+            try:
+                memories = self.memory_manager.recall(query, top_k=5)
+                if memories:
+                    parts.append("[相关记忆]")
+                    for mem in memories:
+                        parts.append(f"- {mem}")
+            except Exception:
+                pass
+
+        return "\n".join(parts) if parts else ""
 
     def _build_runtime(self, query: str, skill: Skill) -> RuntimeContext:
         """构建实时层 Context"""

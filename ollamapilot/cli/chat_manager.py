@@ -277,6 +277,24 @@ class OllamaPilotChat:
             self.history_manager.restore()
             self.history_manager.start_auto_save()
 
+            # 将历史注入到 ContextBuilder（启动时加载，避免每次调用时传递）
+            if self.agent and self.agent.context_builder:
+                from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+                history_messages = []
+                for msg in self.history_manager.get_messages():
+                    role = msg.get("role", "")
+                    content = msg.get("content", "")
+                    if role == "human":
+                        history_messages.append(HumanMessage(content=content))
+                    elif role == "ai":
+                        history_messages.append(AIMessage(content=content))
+                    elif role == "tool":
+                        tool_name = msg.get("metadata", {}).get("tool_name", "unknown")
+                        history_messages.append(ToolMessage(content=content, tool_call_id="loaded", name=tool_name))
+                if history_messages:
+                    self.agent.context_builder.set_preloaded_history(history_messages, thread_id=self.current_session_id)
+                    print(f"💾 已加载 {len(history_messages)} 条历史消息到 Context")
+
             # 初始化文档管理器（手动控制模式）
             if embedding_model:
                 from skills.graphrag.document_manager import DocumentManager
@@ -635,6 +653,22 @@ class OllamaPilotChat:
             self.history_manager.session_id = session_id
             self.history_manager._storage_file = self.history_manager.storage_dir / f"{session_id}.json"
             self.history_manager.restore()
+
+            # 更新 ContextBuilder 中的历史为新会话的历史
+            if self.agent and self.agent.context_builder:
+                from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+                history_messages = []
+                for msg in self.history_manager.get_messages():
+                    role = msg.get("role", "")
+                    content = msg.get("content", "")
+                    if role == "human":
+                        history_messages.append(HumanMessage(content=content))
+                    elif role == "ai":
+                        history_messages.append(AIMessage(content=content))
+                    elif role == "tool":
+                        tool_name = msg.get("metadata", {}).get("tool_name", "unknown")
+                        history_messages.append(ToolMessage(content=content, tool_call_id="loaded", name=tool_name))
+                self.agent.context_builder.set_preloaded_history(history_messages, thread_id=session_id)
 
         return True
     

@@ -534,7 +534,48 @@ agent = create_agent(model, middleware=[mcp_mw])
 
 ## 📋 版本历史
 
-### v0.5.0 (当前) - 架构重构与中间件系统
+### v0.5.1 (当前) - 多会话管理与历史打通
+
+**🎉 重磅更新：真正的多会话管理 + CLI/Channels 历史统一**
+
+#### 💬 多会话管理（Channels）
+
+**每个用户可以有多个独立会话，随时切换**：
+
+- ✅ **真正的多会话**：`/new` 创建全新会话，完全独立的对话历史
+- ✅ **会话列表**：`/sessions` 查看所有会话，显示消息数和最后活动时间
+- ✅ **快速切换**：`/switch <ID前8位>` 切换到指定会话继续对话
+- ✅ **会话隔离**：每个会话有独立的 thread_id，历史完全隔离
+- ✅ **自动命名**：支持自定义会话名称，方便识别
+
+**存储结构**：
+```
+data/channel_sessions/history/
+├── qq/
+│   ├── user1/
+│   │   ├── _sessions.json              # 会话元数据
+│   │   ├── sess_xxx.json               # 会话1历史
+│   │   └── sess_yyy.json               # 会话2历史
+```
+
+#### 🔗 CLI/Channels 历史打通
+
+**统一的历史加载机制，确保 AI 能正确回忆对话**：
+
+- ✅ **统一 Agent 创建**：Channels 使用 `create_agent()` 工厂函数，与 CLI 完全一致
+- ✅ **预加载历史**：启动时自动加载所有会话历史到 ContextBuilder
+- ✅ **Thread ID 统一**：`{channel}_{user_id}_{session_id}` 格式，确保历史正确关联
+- ✅ **Context 注入**：对话历史通过四层 Context 架构注入 System Prompt
+
+#### 🐛 关键 Bug 修复
+
+- ✅ **修复 json 导入错误**：`_preload_all_channel_histories()` 添加缺失的 `import json`
+- ✅ **修复 thread_id 不一致**：统一使用 session_id 生成 thread_id
+- ✅ **修复历史加载失败**：预加载时正确读取 JSON 文件
+
+---
+
+### v0.5.0 - 架构重构与中间件系统
 
 **🎉 重磅更新：四层 Context 架构 + 中间件系统 + 统一历史持久化**
 

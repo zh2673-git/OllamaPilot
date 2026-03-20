@@ -377,10 +377,12 @@ class OllamaPilotAgent:
             "recursion_limit": self.max_tool_calls + 10
         }
 
-        messages = [HumanMessage(content=query)]
-
         if not hasattr(self, '_agent') or self._agent is None:
             self._agent = self._create_agent()
+
+        # MemorySaver 会自动管理历史，只需传入当前消息
+        # checkpointer 会在 before_model 时自动加载历史
+        messages = [HumanMessage(content=query)]
 
         result = self._agent.invoke(
             {"messages": messages},
@@ -580,6 +582,7 @@ class OllamaPilotAgent:
         if not hasattr(self, '_agent') or self._agent is None:
             self._agent = self._create_agent()
 
+        # MemorySaver 会自动管理历史，只需传入当前消息
         messages = [HumanMessage(content=query)]
 
         for chunk in self._agent.stream(
@@ -600,6 +603,7 @@ class OllamaPilotAgent:
         if not hasattr(self, '_agent') or self._agent is None:
             self._agent = self._create_agent()
 
+        # MemorySaver 会自动管理历史，只需传入当前消息
         messages = [HumanMessage(content=query)]
 
         async for event in self._agent.astream_events(

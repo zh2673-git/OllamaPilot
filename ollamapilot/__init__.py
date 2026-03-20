@@ -86,7 +86,7 @@ from ollamapilot.tools.custom import load_custom_tool, discover_custom_tools
 # 日志配置
 from ollamapilot.logging_config import setup_logging, get_logger, set_module_level
 
-__version__ = "1.1.0"
+__version__ = "0.5.1"
 __all__ = [
     # 模型管理
     "init_ollama_model",

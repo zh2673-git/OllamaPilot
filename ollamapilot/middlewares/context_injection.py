@@ -47,13 +47,21 @@ class ContextInjectionMiddleware(AgentMiddleware):
         if not query:
             return state
 
+        # 从 runtime 或 state 获取 thread_id
+        thread_id = "default"
+        if runtime and hasattr(runtime, "config") and runtime.config:
+            thread_id = runtime.config.get("configurable", {}).get("thread_id", "default")
+        elif "thread_id" in state:
+            thread_id = state["thread_id"]
+
         context = self.builder.build_four_layer(
             query=query,
             history=messages,
             knowledge=True,
             working=True,
             realtime=True,
-            memory=True
+            memory=True,
+            thread_id=thread_id
         )
 
         system_prompt = context.to_prompt()

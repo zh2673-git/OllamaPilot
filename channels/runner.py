@@ -128,7 +128,7 @@ class ChannelRunner:
     def _init_agent(self):
         """初始化 OllamaPilot Agent（单用户模式，启动时直接创建）"""
         try:
-            from ollamapilot import init_ollama_model, OllamaPilotAgent
+            from ollamapilot import init_ollama_model, create_agent
 
             agent_config = self.config.get("agent", {})
             model_name = agent_config.get("model", "qwen3.5:4b")
@@ -144,17 +144,14 @@ class ChannelRunner:
             self.model = model
             self.model_name = model_name  # 保存模型名称用于图片分析
 
-            # 单用户模式：直接创建全局 Agent，所有消息共用
+            # 单用户模式：使用 create_agent 工厂函数（与 CLI 一致）
             logger.info("🔥 正在加载 Agent（包含所有 Skill 和记忆）...")
-            checkpointer = self.session_manager.get_checkpointer("qq", "single_user")
-            self.agent = OllamaPilotAgent(
-                model=model,
-                skills_dir=skills_dir,
-                verbose=verbose,
-                enable_memory=True,
-                checkpointer=checkpointer
-            )
+            agent_kwargs = {"skills_dir": skills_dir, "verbose": verbose}
+            self.agent = create_agent(model, **agent_kwargs)
             logger.info(f"✅ Agent 加载完成，已加载 {len(self.agent.all_tools)} 个工具")
+
+            # 为每个渠道用户预加载历史到 ContextBuilder
+            self._preload_all_channel_histories()
 
         except ImportError as e:
             logger.error(f"❌ 导入 OllamaPilot 失败: {e}")
@@ -171,7 +168,84 @@ class ChannelRunner:
             OllamaPilotAgent 实例
         """
         return self.agent
-    
+
+    def _get_thread_id(self, channel: str, user_id: str, session_id: str) -> str:
+        """生成统一的 thread_id
+
+        格式: {channel}_{user_id}_{session_id}
+        用于: ContextBuilder、MemorySaver、Checkpointer
+        每个会话有独立的 thread_id，实现真正的会话隔离
+        """
+        return f"{channel}_{user_id}_{session_id}"
+
+    def _preload_all_channel_histories(self):
+        """为所有渠道用户的所有会话预加载历史到 ContextBuilder"""
+        if not self.agent or not self.agent.context_builder:
+            return
+
+        import json
+        from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+
+        # 扫描所有渠道的历史文件
+        history_dir = Path("./data/channel_sessions/history")
+        if not history_dir.exists():
+            return
+
+        total_sessions = 0
+        total_messages = 0
+
+        for channel_dir in history_dir.iterdir():
+            if not channel_dir.is_dir():
+                continue
+
+            channel_name = channel_dir.name
+
+            # 遍历每个用户目录
+            for user_dir in channel_dir.iterdir():
+                if not user_dir.is_dir():
+                    continue
+
+                user_id = user_dir.name
+
+                # 遍历该用户的所有会话文件
+                for session_file in user_dir.glob("sess_*.json"):
+                    session_id = session_file.stem
+
+                    try:
+                        with open(session_file, "r", encoding="utf-8") as f:
+                            messages = json.load(f)
+
+                        if not messages:
+                            continue
+
+                        # 转换为 LangChain Message 对象
+                        history_messages = []
+                        for msg in messages:
+                            role = msg.get("role", "")
+                            content = msg.get("content", "")
+
+                            if role == "human":
+                                history_messages.append(HumanMessage(content=content))
+                            elif role == "ai":
+                                history_messages.append(AIMessage(content=content))
+                            elif role == "tool":
+                                tool_name = msg.get("metadata", {}).get("tool_name", "unknown")
+                                history_messages.append(ToolMessage(content=content, tool_call_id="loaded", name=tool_name))
+
+                        if history_messages:
+                            # 使用 session_id 作为 thread_id 的一部分
+                            thread_id = self._get_thread_id(channel_name, user_id, session_id)
+                            self.agent.context_builder.set_preloaded_history(history_messages, thread_id=thread_id)
+                            total_sessions += 1
+                            total_messages += len(history_messages)
+                            logger.info(f"💾 已加载 {channel_name}/{user_id}/{session_id[:16]}... 的 {len(history_messages)} 条历史消息到 thread_id={thread_id}")
+
+                    except Exception as e:
+                        logger.warning(f"加载 {channel_name}/{user_id}/{session_id} 历史失败: {e}")
+
+        if total_messages > 0:
+            logger.info(f"💾 共为 {total_sessions} 个会话预加载 {total_messages} 条历史消息到 Context")
+
     def _init_channels(self):
         """初始化所有启用的渠道"""
         channel_configs = self.config.get("channels", {})
@@ -345,7 +419,11 @@ class ChannelRunner:
     def _sync_invoke_with_prompt(self, message: ChannelMessage, prompt: str) -> str:
         """同步调用agent，使用自定义提示词"""
         agent = self._get_agent()
-        thread_id = f"{message.channel_name}_{message.user_id}_{message.message_type}"
+
+        # 获取历史管理器，使用当前会话的 session_id 生成 thread_id
+        history_manager = get_history_manager(message.channel_name, message.user_id)
+        session_id = history_manager.get_current_session_id()
+        thread_id = self._get_thread_id(message.channel_name, message.user_id, session_id)
 
         # 使用agent的invoke，但传入自定义提示
         return agent.invoke(query=prompt, thread_id=thread_id)
@@ -438,14 +516,28 @@ class ChannelRunner:
     def _cmd_new(self, channel: str, user_id: str, args: str) -> ChannelResponse:
         """创建新会话"""
         try:
-            # 清除当前用户的缓存，强制创建新的Agent
-            cache_key = f"{channel}:{user_id}"
-            if hasattr(self, '_user_agents') and cache_key in self._user_agents:
-                del self._user_agents[cache_key]
+            # 获取历史管理器
+            history_manager = get_history_manager(channel, user_id)
 
             # 创建新的会话
-            session_info = self.session_manager.get_or_create_session(channel, user_id)
-            session_name = args.strip() if args else f"会话_{session_info['session_id'][:8]}"
+            session_name = args.strip() if args else None
+            session_id = history_manager.create_session(session_name)
+            session_name = session_name or f"会话_{session_id[:8]}"
+
+            # 使用新的 session_id 生成 thread_id
+            thread_id = self._get_thread_id(channel, user_id, session_id)
+
+            # 更新 ContextBuilder 中的历史（清空，因为新会话没有历史）
+            if self.agent and self.agent.context_builder:
+                self.agent.context_builder.set_preloaded_history([], thread_id=thread_id)
+
+            # 清除 checkpointer 中的历史
+            if self.agent and self.agent.checkpointer:
+                try:
+                    config = {"configurable": {"thread_id": thread_id}}
+                    self.agent.checkpointer.delete(config)
+                except Exception:
+                    pass
 
             return ChannelResponse(content=f"✅ 已创建新会话: {session_name}\n💡 现在可以开始新的对话了")
         except Exception as e:
@@ -455,23 +547,33 @@ class ChannelRunner:
     def _cmd_sessions(self, channel: str, user_id: str) -> ChannelResponse:
         """列出会话"""
         try:
-            sessions = self.session_manager.list_sessions(channel, user_id)
+            # 获取历史管理器
+            history_manager = get_history_manager(channel, user_id)
+            sessions = history_manager.list_sessions()
+
             if not sessions:
                 return ChannelResponse(content="📭 暂无会话\n💡 使用 /new 创建新会话")
 
+            current_session_id = history_manager.get_current_session_id()
+
             lines = ["📋 会话列表:"]
             for s in sessions[:10]:  # 最多显示10个
-                msg_count = s.get('message_count', 0)
-                last_time = s.get('last_activity', '未知')
-                if last_time and last_time != '未知':
-                    # 简化时间显示
-                    last_time = str(last_time).split('.')[0]  # 去掉微秒
-                lines.append(f"  • {s['session_id'][:8]}: {msg_count}条消息 | {last_time}")
+                marker = "👉" if s.session_id == current_session_id else "  "
+                msg_count = s.message_count
+                last_time = s.updated_at
+                # 格式化时间
+                from datetime import datetime
+                try:
+                    dt = datetime.fromtimestamp(last_time)
+                    time_str = dt.strftime("%m-%d %H:%M")
+                except:
+                    time_str = "未知"
+                lines.append(f"{marker} {s.name} ({s.session_id[:8]}): {msg_count}条消息 | {time_str}")
 
             if len(sessions) > 10:
                 lines.append(f"  ... 还有 {len(sessions) - 10} 个会话")
 
-            lines.append(f"\n💡 使用 /switch <ID> 切换会话")
+            lines.append(f"\n💡 使用 /switch <ID前8位> 切换会话")
             return ChannelResponse(content="\n".join(lines))
         except Exception as e:
             logger.error(f"列出会话失败: {e}")
@@ -484,23 +586,46 @@ class ChannelRunner:
 
         session_id = args.strip()
         try:
-            # 查找匹配的会话
-            sessions = self.session_manager.list_sessions(channel, user_id)
-            matched = None
-            for s in sessions:
-                if s['session_id'].startswith(session_id):
-                    matched = s
-                    break
+            # 获取历史管理器
+            history_manager = get_history_manager(channel, user_id)
 
-            if not matched:
+            # 切换到指定会话
+            if not history_manager.switch_session(session_id):
                 return ChannelResponse(content=f"❌ 未找到会话: {session_id}\n使用 /sessions 查看可用会话")
 
-            # 清除缓存，下次会使用新的会话
-            cache_key = f"{channel}:{user_id}"
-            if hasattr(self, '_user_agents') and cache_key in self._user_agents:
-                del self._user_agents[cache_key]
+            # 获取切换后的会话信息
+            new_session_id = history_manager.get_current_session_id()
+            new_session_name = history_manager.get_current_session_name()
 
-            return ChannelResponse(content=f"✅ 已切换到会话: {matched['session_id'][:8]}\n💡 继续对话将使用此会话的历史")
+            # 使用新的 session_id 生成 thread_id
+            thread_id = self._get_thread_id(channel, user_id, new_session_id)
+
+            # 更新 ContextBuilder 中的历史
+            if self.agent and self.agent.context_builder:
+                from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+                messages = history_manager.get_messages()
+                history_messages = []
+                for msg in messages:
+                    role = msg.get("role", "")
+                    content = msg.get("content", "")
+                    if role == "human":
+                        history_messages.append(HumanMessage(content=content))
+                    elif role == "ai":
+                        history_messages.append(AIMessage(content=content))
+                    elif role == "tool":
+                        tool_name = msg.get("metadata", {}).get("tool_name", "unknown")
+                        history_messages.append(ToolMessage(content=content, tool_call_id="loaded", name=tool_name))
+                self.agent.context_builder.set_preloaded_history(history_messages, thread_id=thread_id)
+
+            # 清除 checkpointer 中的历史（切换会话后需要重新加载）
+            if self.agent and self.agent.checkpointer:
+                try:
+                    config = {"configurable": {"thread_id": thread_id}}
+                    self.agent.checkpointer.delete(config)
+                except Exception:
+                    pass
+
+            return ChannelResponse(content=f"✅ 已切换到会话: {new_session_name} ({new_session_id[:8]})\n💡 继续对话将使用此会话的历史")
         except Exception as e:
             logger.error(f"切换会话失败: {e}")
             return ChannelResponse(content=f"❌ 切换会话失败: {str(e)}")
@@ -508,28 +633,26 @@ class ChannelRunner:
     def _cmd_clear(self, channel: str, user_id: str) -> ChannelResponse:
         """清空当前会话"""
         try:
-            # 清除Agent缓存
-            cache_key = f"{channel}:{user_id}"
-            if hasattr(self, '_user_agents') and cache_key in self._user_agents:
-                agent = self._user_agents[cache_key]
-                # 获取当前thread_id并清除
-                thread_id = f"{channel}_{user_id}_private"
-                # 清除 checkpointer
-                if agent and agent.checkpointer:
-                    try:
-                        config = {"configurable": {"thread_id": thread_id}}
-                        agent.checkpointer.delete(config)
-                    except Exception:
-                        pass
-                del self._user_agents[cache_key]
+            # 获取历史管理器
+            history_manager = get_history_manager(channel, user_id)
+            session_id = history_manager.get_current_session_id()
+            thread_id = self._get_thread_id(channel, user_id, session_id)
+
+            # 清除 checkpointer
+            if self.agent and self.agent.checkpointer:
+                try:
+                    config = {"configurable": {"thread_id": thread_id}}
+                    self.agent.checkpointer.delete(config)
+                except Exception:
+                    pass
 
             # 清除 JSON 历史文件
-            try:
-                history_manager = get_history_manager(channel, user_id)
-                history_manager.clear()
-                history_manager.save()
-            except Exception as e:
-                logger.warning(f"清除历史文件失败: {e}")
+            history_manager.clear()
+            history_manager.save()
+
+            # 更新 ContextBuilder 中的历史
+            if self.agent and self.agent.context_builder:
+                self.agent.context_builder.set_preloaded_history([], thread_id=thread_id)
 
             return ChannelResponse(content="✅ 当前会话已清空\n💡 历史记录已清除，开始新的对话")
         except Exception as e:
@@ -607,12 +730,17 @@ class ChannelRunner:
         # 使用全局 Agent
         agent = self._get_agent()
 
-        thread_id = f"{message.channel_name}_{message.user_id}_{message.message_type}"
         channel = message.channel_name
         user_id = message.user_id
 
-        # 获取历史管理器
+        # 获取历史管理器，使用当前会话的 session_id
         history_manager = get_history_manager(channel, user_id)
+        session_id = history_manager.get_current_session_id()
+        thread_id = self._get_thread_id(channel, user_id, session_id)
+
+        # 调试信息
+        preloaded = self.agent.context_builder.get_preloaded_history(thread_id)
+        logger.info(f"🔍 当前会话: {session_id}, thread_id: {thread_id}, 预加载历史: {len(preloaded)} 条")
 
         # 恢复历史到 agent 的 checkpointer
         self._restore_history_to_agent(agent, thread_id, history_manager)
