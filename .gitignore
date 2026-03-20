@@ -166,3 +166,7 @@ channels/config.yaml
 !channels/config.yaml.example
 channels/config.yaml
 logs/
+
+# Workspace (contains personal data - SOUL.md, IDENTITY.md, USER.md, etc.)
+ollamapilot/workspace/
+workspace/

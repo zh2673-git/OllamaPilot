@@ -7,6 +7,10 @@ OllamaPilot - 基于 LangChain 1.0+ 的 Ollama 智能助手
     - Skill 系统: 可独立开发、部署的功能模块
     - 工具生态: 内置常用工具，支持自定义扩展
     - GraphRAG: 基于知识图谱的检索增强（作为独立 Skill）
+    - 四层 Context: L3/L2/L1/L0 架构
+    - 中间件系统: Context 注入、记忆检索、上下文压缩
+
+V0.5.0 重构：简化架构，移除废弃文件依赖
 
 示例:
     >>> from ollamapilot import create_agent, init_ollama_model
@@ -39,16 +43,33 @@ from ollamapilot.models import (
 # Agent
 from ollamapilot.agent import create_agent, OllamaPilotAgent, create_ollama_agent
 
+# Context
+from ollamapilot.context import (
+    ContextBuilder,
+    Context,
+    ContextCompactor,
+    CompressionResult,
+    TokenOptimizer,
+)
+
+# Memory
+from ollamapilot.memory import (
+    MemoryManager,
+    MemoryIndexer,
+    MemoryType,
+    MemoryEntry,
+    SearchResult,
+)
+
+# Middlewares
+from ollamapilot.middlewares import (
+    ContextInjectionMiddleware,
+    MemoryRetrievalMiddleware,
+    CompactionMiddleware,
+)
+
 # Skill
 from ollamapilot.skills import Skill, SkillRegistry, DefaultSkill, MarkdownSkill
-
-# Skill Middleware
-from ollamapilot.skill_middleware import (
-    SkillMiddleware,
-    SkillSelectorMiddleware,
-    ToolLoggingMiddleware,
-    create_skill_middlewares,
-)
 
 # MCP 工具
 from ollamapilot.tools.mcp_tools import (
@@ -79,16 +100,27 @@ __all__ = [
     "create_agent",
     "create_ollama_agent",
     "OllamaPilotAgent",
+    # Context
+    "ContextBuilder",
+    "Context",
+    "ContextCompactor",
+    "CompressionResult",
+    "TokenOptimizer",
+    # Memory
+    "MemoryManager",
+    "MemoryIndexer",
+    "MemoryType",
+    "MemoryEntry",
+    "SearchResult",
+    # Middlewares
+    "ContextInjectionMiddleware",
+    "MemoryRetrievalMiddleware",
+    "CompactionMiddleware",
     # Skill
     "Skill",
     "SkillRegistry",
     "DefaultSkill",
     "MarkdownSkill",
-    # Skill Middleware
-    "SkillMiddleware",
-    "SkillSelectorMiddleware",
-    "ToolLoggingMiddleware",
-    "create_skill_middlewares",
     # MCP 工具
     "MCPMiddleware",
     "create_mcp_middleware",

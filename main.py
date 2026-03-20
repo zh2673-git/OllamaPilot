@@ -182,6 +182,7 @@ def main():
 
             if user_input.lower() in ['quit', 'exit', 'q', 'bye']:
                 print("\n👋 再见！")
+                chat_manager.close()
                 break
 
             # 处理命令
@@ -193,6 +194,7 @@ def main():
 
         except KeyboardInterrupt:
             print("\n\n👋 再见！")
+            chat_manager.close()
             break
         except Exception as e:
             print(f"\n❌ 错误: {e}\n")

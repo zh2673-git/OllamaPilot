@@ -534,7 +534,75 @@ agent = create_agent(model, middleware=[mcp_mw])
 
 ## 📋 版本历史
 
-### v0.4.2 (当前) - 代码质量优化与会话历史修复
+### v0.5.0 (当前) - 架构重构与中间件系统
+
+**🎉 重磅更新：四层 Context 架构 + 中间件系统 + 统一历史持久化**
+
+#### 🏗️ 四层 Context 架构（架构重构方案 v0.5.0）
+
+全新设计的上下文管理架构，将上下文分为四个层次：
+
+| 层级 | 名称 | 作用 | 内容 |
+|------|------|------|------|
+| L3 | 知识层 (Knowledge) | 长期知识上下文 | SOUL.md、IDENTITY.md、USER.md |
+| L2 | 工作层 (Working) | 任务执行上下文 | AGENTS.md、对话历史 |
+| L1 | 实时层 (Realtime) | 当前对话上下文 | 当前查询、时间信息 |
+| L0 | 记忆层 (Memory) | 持久化记忆 | 向量索引、关键词检索 |
+
+**核心改进**：
+- ✅ **ContextBuilder**: 统一构建四层 Context，支持 Token 预算优化
+- ✅ **MemoryManager**: 记忆管理器，支持向量索引和关键词搜索
+- ✅ **ContextCompactor**: 上下文压缩，超长对话自动优化
+- ✅ **自动模板生成**: 首次启动自动生成 workspace 模板文件
+
+#### 🔧 中间件系统（LangChain 原生）
+
+基于 LangChain 1.0+ 的中间件架构：
+
+| 中间件 | 功能 | 执行时机 |
+|--------|------|----------|
+| ContextInjectionMiddleware | 注入四层 Context | before_model |
+| MemoryRetrievalMiddleware | 检索相关记忆 | before_model |
+| CompactionMiddleware | 压缩上下文 | before_model |
+| ToolRetryMiddleware | 工具重试 | wrap_tool_call |
+| ToolCallLimitMiddleware | 限制工具调用次数 | before_model |
+
+**优势**：
+- ✅ 职责分离，代码更清晰
+- ✅ 可插拔设计，易于扩展
+- ✅ 自动获得 LangChain 内置中间件能力
+
+#### 💾 统一历史持久化（MemorySaver + JSON）
+
+**CLI 和 Channels 统一使用相同的历史存储机制**：
+
+- ✅ **内存优先**: 使用 `MemorySaver` 保证读写速度
+- ✅ **JSON 持久化**: 定期保存到 JSON 文件，重启不丢失
+- ✅ **自动恢复**: 启动时自动从 JSON 恢复历史
+- ✅ **统一架构**: CLI 和 Channels 共享相同的持久化逻辑
+
+**存储位置**：
+```
+data/sessions/history/          # CLI 历史
+data/channel_sessions/history/  # Channels 历史
+```
+
+#### 🚀 Channels 架构修复
+
+- ✅ **修复 checkpointer 类型错误**: 使用 `MemorySaver` 替代 `SqliteSaver`
+- ✅ **添加历史持久化**: Channels 现在支持 JSON 历史存储
+- ✅ **统一会话管理**: 与 CLI 使用相同的会话管理机制
+
+#### 🛠️ 其他改进
+
+- ✅ **Skill 基类重构**: `skills/base.py` 统一 Skill 基类，代码更清晰
+- ✅ **自动模板生成**: 首次启动自动生成 SOUL.md、IDENTITY.md 等模板
+- ✅ **GitHub 安全**: workspace/ 目录加入 .gitignore，个人数据不上传
+- ✅ **代码清理**: 删除废弃文件，精简项目结构
+
+---
+
+### v0.4.2 - 代码质量优化与会话历史修复
 
 **🔧 提升代码质量和稳定性**
 

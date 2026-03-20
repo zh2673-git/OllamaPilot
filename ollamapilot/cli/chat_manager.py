@@ -29,6 +29,7 @@ from ollamapilot.config import get_config, reload_config
 
 from .session import Session
 from .session_store import SessionStore
+from .history_manager import SimpleHistoryManager
 from .completer import CommandCompleter, HAS_READLINE
 from ollamapilot.logging_config import get_default_logger
 
@@ -64,7 +65,10 @@ class OllamaPilotChat:
         
         # 会话存储管理器
         self.session_store = SessionStore("./data/sessions/conversations.db")
-        
+
+        # 对话历史管理器（定期保存）
+        self.history_manager: Optional[SimpleHistoryManager] = None
+
         # 初始化默认会话
         self._create_session("default", "默认会话")
         
@@ -122,7 +126,79 @@ class OllamaPilotChat:
         """设置命令自动补全"""
         if self.completer.setup():
             logger.debug("命令自动补全已启用（按 Tab 键）")
-    
+
+    def close(self):
+        """关闭聊天管理器，保存所有状态"""
+        if self.history_manager:
+            self._save_history_from_agent()
+            self.history_manager.close()
+        self.session_store.close()
+
+    def _save_history_from_agent(self):
+        """从 agent 的 checkpointer 提取完整历史并保存"""
+        if not self.agent or not self.agent.checkpointer or not self.history_manager:
+            return
+
+        config = {"configurable": {"thread_id": self.current_session_id}}
+
+        try:
+            checkpoint_tuple = self.agent.checkpointer.get_tuple(config)
+            if not checkpoint_tuple or not checkpoint_tuple.checkpoint:
+                return
+
+            checkpoint = checkpoint_tuple.checkpoint
+            messages = checkpoint.get("messages", [])
+
+            for msg in messages:
+                if hasattr(msg, "content") and msg.content:
+                    msg_type = type(msg).__name__
+                    if "Human" in msg_type:
+                        self.history_manager.add_human_message(msg.content)
+                    elif "AIMessage" in msg_type:
+                        self.history_manager.add_ai_message(msg.content)
+                    elif "ToolMessage" in msg_type:
+                        tool_name = getattr(msg, "name", "unknown")
+                        self.history_manager.add_tool_message(msg.content, tool_name)
+        except Exception:
+            pass
+
+    def _restore_history_to_agent(self):
+        """将历史从 history_manager 恢复到 agent 的 checkpointer"""
+        if not self.agent or not self.agent.checkpointer:
+            return
+
+        messages = self.history_manager.get_messages()
+        if not messages:
+            return
+
+        from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
+
+        config = {"configurable": {"thread_id": self.current_session_id}}
+
+        reconstructed = []
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+
+            if role == "human":
+                reconstructed.append(HumanMessage(content=content))
+            elif role == "ai":
+                reconstructed.append(AIMessage(content=content))
+            elif role == "tool":
+                tool_name = msg.get("metadata", {}).get("tool_name", "unknown")
+                reconstructed.append(ToolMessage(content=content, tool_call_id="restored", name=tool_name))
+
+        if reconstructed:
+            checkpoint = {"messages": reconstructed}
+            try:
+                self.agent.checkpointer.put(
+                    config,
+                    checkpoint,
+                    {"source": "checkpoint", "timestamp": time.time()}
+                )
+            except Exception:
+                pass
+
     def _get_files_in_directory(self, dir_path: str) -> List[str]:
         """获取目录中所有支持的文档文件"""
         files = []
@@ -191,7 +267,16 @@ class OllamaPilotChat:
             
             self.agent = create_agent(self.current_model, **agent_kwargs)
             print("✅ Agent 创建完成")
-            
+
+            # 初始化对话历史管理器
+            self.history_manager = SimpleHistoryManager(
+                session_id=self.current_session_id,
+                storage_dir="./data/sessions/history",
+                auto_save_interval=30,
+            )
+            self.history_manager.restore()
+            self.history_manager.start_auto_save()
+
             # 初始化文档管理器（手动控制模式）
             if embedding_model:
                 from skills.graphrag.document_manager import DocumentManager
@@ -541,10 +626,16 @@ class OllamaPilotChat:
         self.current_session_id = session_id
         session = self.sessions[session_id]
         print(f"\n✅ 已切换到会话: {session.name}")
-        
+
         if session.model_name != self.current_model_name:
             print(f"💡 提示: 该会话使用模型 '{session.model_name}'，当前模型是 '{self.current_model_name}'")
-        
+
+        if self.history_manager:
+            self.history_manager.save()
+            self.history_manager.session_id = session_id
+            self.history_manager._storage_file = self.history_manager.storage_dir / f"{session_id}.json"
+            self.history_manager.restore()
+
         return True
     
     def list_sessions(self):
@@ -919,8 +1010,16 @@ class OllamaPilotChat:
             # 显示工具调用信息
             tool_info = ""
             if hasattr(msg, 'tool_calls') and msg.tool_calls:
-                tool_names = [tc.get('name', 'unknown') for tc in msg.tool_calls]
-                tool_info = f" [工具: {', '.join(tool_names)}]"
+                tool_calls_detail = []
+                for tc in msg.tool_calls:
+                    tool_name = tc.get('name', 'unknown') if isinstance(tc, dict) else getattr(tc, 'name', 'unknown')
+                    args = tc.get('args', {}) if isinstance(tc, dict) else getattr(tc, 'args', {})
+                    if isinstance(args, dict) and args:
+                        args_str = ", ".join([f"{k}={repr(v)[:50]}{'...' if len(str(v)) > 50 else ''}" for k, v in list(args.items())[:3]])
+                        tool_calls_detail.append(f"{tool_name}({args_str})")
+                    else:
+                        tool_calls_detail.append(tool_name)
+                tool_info = f" [工具: {', '.join(tool_calls_detail)}]"
 
             # 显示工具名称
             if hasattr(msg, 'name') and msg.name:
@@ -1089,6 +1188,9 @@ class OllamaPilotChat:
             print("❌ Agent 未初始化")
             return
 
+        if self.history_manager:
+            self._restore_history_to_agent()
+
         # 检查是否有正在进行的索引任务
         indexing_count = len(self.doc_manager._indexing_tasks)
         if indexing_count > 0:
@@ -1102,6 +1204,11 @@ class OllamaPilotChat:
             self.sessions[self.current_session_id].increment_message()
 
         print("\n助手: ", end="", flush=True)
+
+        # 显示选中的 Skill
+        active_skill = getattr(self.agent, '_active_skill_name', None)
+        if active_skill:
+            print(f"\n🎯 使用 Skill: {active_skill}", end="", flush=True)
 
         full_response = ""
         has_content = False
@@ -1127,6 +1234,17 @@ class OllamaPilotChat:
                     tool_name = event.get("name", "unknown")
                     tool_call_count += 1
                     print(f"\n🔧 执行工具: {tool_name}...", end="", flush=True)
+                    
+                    data = event.get("data", {})
+                    if data:
+                        input_data = data.get("input", data.get("chunk", ""))
+                        if input_data and isinstance(input_data, dict):
+                            args_preview = []
+                            for k, v in list(input_data.items())[:5]:
+                                v_str = str(v)[:100] + "..." if len(str(v)) > 100 else str(v)
+                                args_preview.append(f"{k}={v_str}")
+                            if args_preview:
+                                print(f"\n   参数: {', '.join(args_preview)}", end="", flush=True)
                 
                 # 工具执行结束
                 elif event_type == "on_tool_end":
@@ -1172,6 +1290,10 @@ class OllamaPilotChat:
             
             if has_content:
                 print("\n")
+
+                if self.history_manager:
+                    self.history_manager.add_human_message(user_input)
+                    self.history_manager.add_ai_message(full_response)
             elif tool_call_count > 0:
                 # 有工具调用但没有内容输出，尝试强制生成回复
                 if loop.is_running():

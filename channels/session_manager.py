@@ -2,9 +2,9 @@
 渠道会话管理器
 
 为 Channels（QQ、飞书、钉钉等）提供用户级别的会话持久化
-每个用户有独立的对话历史，保存在 SQLite 数据库中
+每个用户有独立的对话历史，保存在内存中
 
-使用 OptimizedCheckpoint 实现高性能：内存优先 + 异步持久化
+使用 MemorySaver 实现快速内存存储
 """
 
 import os
@@ -16,8 +16,7 @@ from dataclasses import dataclass, asdict
 import json
 from datetime import datetime
 
-from langgraph.checkpoint.sqlite import SqliteSaver
-from ollamapilot.infra.optimized_checkpoint import OptimizedCheckpoint
+from langgraph.checkpoint.memory import MemorySaver
 
 
 @dataclass
@@ -39,8 +38,7 @@ class ChannelSessionManager:
     渠道会话管理器
     
     管理多个用户的对话会话，每个用户有独立的：
-    - SQLite 数据库连接
-    - SqliteSaver checkpointer
+    - MemorySaver checkpointer（内存存储，速度快）
     - 会话元数据
     
     使用示例:
@@ -56,14 +54,13 @@ class ChannelSessionManager:
         初始化会话管理器
         
         Args:
-            base_dir: 会话数据存储目录
+            base_dir: 会话数据存储目录（仅用于元数据）
         """
         self.base_dir = Path(base_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
         
-        # 用户会话缓存: {(channel, user_id): OptimizedCheckpoint}
-        # 使用 OptimizedCheckpoint 替代 SqliteSaver，实现内存优先 + 异步持久化
-        self._user_checkpointers: Dict[tuple, OptimizedCheckpoint] = {}
+        # 用户会话缓存: {(channel, user_id): MemorySaver}
+        self._user_checkpointers: Dict[tuple, MemorySaver] = {}
         
         # 线程锁，保护并发访问
         self._lock = threading.RLock()
@@ -93,29 +90,19 @@ class ChannelSessionManager:
         conn.commit()
         conn.close()
     
-    def _get_user_db_path(self, channel: str, user_id: str) -> Path:
-        """获取用户数据库文件路径"""
-        # 按渠道分目录，避免文件名冲突
-        channel_dir = self.base_dir / channel
-        channel_dir.mkdir(exist_ok=True)
-        
-        # 使用用户 ID 作为文件名（进行简单编码避免特殊字符）
-        safe_user_id = user_id.replace("/", "_").replace("\\", "_")
-        return channel_dir / f"{safe_user_id}.db"
-    
-    def get_checkpointer(self, channel: str, user_id: str) -> OptimizedCheckpoint:
+    def get_checkpointer(self, channel: str, user_id: str) -> MemorySaver:
         """
         获取用户的 checkpointer
 
-        如果用户没有活跃的 checkpointer，会创建新的连接
-        使用 OptimizedCheckpoint 实现高性能：内存优先 + 异步持久化
+        如果用户没有活跃的 checkpointer，会创建新的 MemorySaver
+        使用 MemorySaver 实现快速内存存储
 
         Args:
             channel: 渠道名称 (qq, feishu, dingtalk)
             user_id: 用户 ID
 
         Returns:
-            OptimizedCheckpoint 实例
+            MemorySaver 实例
         """
         key = (channel, user_id)
 
@@ -124,13 +111,8 @@ class ChannelSessionManager:
             if key in self._user_checkpointers:
                 return self._user_checkpointers[key]
 
-            # 创建新的 OptimizedCheckpoint（内存优先 + 异步持久化）
-            db_path = self._get_user_db_path(channel, user_id)
-            checkpointer = OptimizedCheckpoint(
-                db_path=str(db_path),
-                save_interval=30,  # 每30秒自动保存一次
-                verbose=False  # 渠道模式下减少日志输出
-            )
+            # 创建新的 MemorySaver
+            checkpointer = MemorySaver()
 
             # 缓存起来
             self._user_checkpointers[key] = checkpointer
@@ -291,18 +273,13 @@ class ChannelSessionManager:
         
         with self._lock:
             if key in self._user_checkpointers:
-                checkpointer = self._user_checkpointers[key]
-                # 关闭数据库连接
-                if hasattr(checkpointer, 'conn'):
-                    checkpointer.conn.close()
+                # MemorySaver 没有显式关闭方法，直接删除引用
                 del self._user_checkpointers[key]
     
     def close_all_sessions(self):
         """关闭所有会话连接"""
         with self._lock:
-            for key, checkpointer in list(self._user_checkpointers.items()):
-                if hasattr(checkpointer, 'conn'):
-                    checkpointer.conn.close()
+            # MemorySaver 没有显式关闭方法，直接清空引用
             self._user_checkpointers.clear()
     
     def get_session_stats(self) -> Dict[str, Any]:

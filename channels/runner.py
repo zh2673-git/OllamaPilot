@@ -18,6 +18,7 @@ import concurrent.futures
 import logging
 import signal
 import sys
+import time
 from collections import deque
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -40,6 +41,7 @@ sys.path.insert(0, str(project_root))
 
 from .base import Channel, ChannelMessage, ChannelResponse
 from .registry import auto_discover_channels, get_channel, list_channels
+from .history_manager import get_history_manager
 
 logger = logging.getLogger(__name__)
 
@@ -512,8 +514,22 @@ class ChannelRunner:
                 agent = self._user_agents[cache_key]
                 # 获取当前thread_id并清除
                 thread_id = f"{channel}_{user_id}_private"
-                # 这里可以添加清除检查点的逻辑
+                # 清除 checkpointer
+                if agent and agent.checkpointer:
+                    try:
+                        config = {"configurable": {"thread_id": thread_id}}
+                        agent.checkpointer.delete(config)
+                    except Exception:
+                        pass
                 del self._user_agents[cache_key]
+
+            # 清除 JSON 历史文件
+            try:
+                history_manager = get_history_manager(channel, user_id)
+                history_manager.clear()
+                history_manager.save()
+            except Exception as e:
+                logger.warning(f"清除历史文件失败: {e}")
 
             return ChannelResponse(content="✅ 当前会话已清空\n💡 历史记录已清除，开始新的对话")
         except Exception as e:
@@ -587,12 +603,71 @@ class ChannelRunner:
                     raise
 
     def _sync_invoke(self, message: ChannelMessage) -> str:
-        """同步调用 agent（在线程池中运行，单用户模式）"""
+        """同步调用 agent（在线程池中运行，单用户模式，带历史持久化）"""
         # 使用全局 Agent
         agent = self._get_agent()
 
         thread_id = f"{message.channel_name}_{message.user_id}_{message.message_type}"
-        return agent.invoke(query=message.content, thread_id=thread_id)
+        channel = message.channel_name
+        user_id = message.user_id
+
+        # 获取历史管理器
+        history_manager = get_history_manager(channel, user_id)
+
+        # 恢复历史到 agent 的 checkpointer
+        self._restore_history_to_agent(agent, thread_id, history_manager)
+
+        # 记录用户消息
+        history_manager.add_human_message(message.content)
+
+        # 调用 agent
+        response = agent.invoke(query=message.content, thread_id=thread_id)
+
+        # 记录 AI 响应
+        if response:
+            history_manager.add_ai_message(response)
+
+        # 保存历史
+        history_manager.save()
+
+        return response
+
+    def _restore_history_to_agent(self, agent, thread_id: str, history_manager):
+        """将历史从 history_manager 恢复到 agent 的 checkpointer"""
+        if not agent or not agent.checkpointer:
+            return
+
+        from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+
+        messages = history_manager.get_messages()
+        if not messages:
+            return
+
+        config = {"configurable": {"thread_id": thread_id}}
+
+        reconstructed = []
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+
+            if role == "human":
+                reconstructed.append(HumanMessage(content=content))
+            elif role == "ai":
+                reconstructed.append(AIMessage(content=content))
+            elif role == "tool":
+                tool_name = msg.get("metadata", {}).get("tool_name", "unknown")
+                reconstructed.append(ToolMessage(content=content, tool_call_id="restored", name=tool_name))
+
+        if reconstructed:
+            checkpoint = {"messages": reconstructed}
+            try:
+                agent.checkpointer.put(
+                    config,
+                    checkpoint,
+                    {"source": "checkpoint", "timestamp": time.time()}
+                )
+            except Exception:
+                pass
     
     def _record_response_time(self, duration: float):
         """记录响应时间"""

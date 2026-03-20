@@ -2,24 +2,21 @@
 系统记忆模块 - 跨会话长期记忆
 
 与 GraphRAG 的区别：
-- SystemMemory: Agent 自动维护，对用户透明
+- MemoryManager: 被 Context 统管，负责记忆检索和存储
 - GraphRAG: 用户主动使用，通过 Skill 触发
 
-三种类型：
-- 语义记忆：用户偏好、重要事实
-- 程序记忆：Skill 使用模式
-- 情景记忆：重要对话摘要
-
-特性：
-- 可选向量检索：通过 enable_vector_search 参数控制
-- 统一接口：无论是否启用向量，接口完全一致
+V0.5.0 重构：简化架构，移除废弃文件依赖
 """
 
 from .types import MemoryType, MemoryEntry
-from .system_memory import SystemMemory
+from .manager import MemoryManager, SearchResult
+from .indexer import MemoryIndexer, OllamaEmbeddingWrapper
 
 __all__ = [
     "MemoryType",
     "MemoryEntry",
-    "SystemMemory",
+    "MemoryManager",
+    "SearchResult",
+    "MemoryIndexer",
+    "OllamaEmbeddingWrapper",
 ]

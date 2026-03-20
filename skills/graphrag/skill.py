@@ -6,15 +6,13 @@ GraphRAG Skill - 知识图谱检索增强
 支持从 .env 配置文件读取设置。
 """
 
-from typing import List, Optional, Any
-from pathlib import Path
+from typing import List, Optional, Any, Dict
 from langchain_core.tools import BaseTool
 from langchain.agents.middleware import AgentMiddleware
-import threading
-import time
 
-from ollamapilot.skills.base import Skill
+from ollamapilot.skills import Skill
 from ollamapilot.config import get_config
+
 
 # GraphRAG Skill 内部模块
 from skills.graphrag.services import (
