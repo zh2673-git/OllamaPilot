@@ -203,10 +203,21 @@ class GraphRAGService:
             print("🔄 检测到旧版数据，开始迁移到三重向量存储...")
 
             try:
+                # 迁移时使用 raise_on_error=True，确保错误能被捕获并重试
+                from .embedding_function import OllamaEmbeddingFunction, SafeEmbeddingFunction
+                embedding_fn = OllamaEmbeddingFunction(
+                    url="http://localhost:11434/api/embeddings",
+                    model_name=self.embedding_model_name,
+                    timeout=120,
+                    max_retries=2
+                )
+                # 包装为安全函数，但迁移时启用错误抛出
+                safe_embedding_fn = SafeEmbeddingFunction(embedding_fn, raise_on_error=True)
+
                 self.triple_store.migrate_from_legacy(
                     entity_index=self.entity_index,
                     relations=self.relations,
-                    embedding_fn=self._embedding_fn,
+                    embedding_fn=safe_embedding_fn,
                     doc_id=self.collection_name
                 )
 
@@ -241,10 +252,21 @@ class GraphRAGService:
             return False  # 已有数据，无需迁移
 
         try:
+            # 迁移时使用 raise_on_error=True，确保错误能被捕获并重试
+            from .embedding_function import OllamaEmbeddingFunction, SafeEmbeddingFunction
+            embedding_fn = OllamaEmbeddingFunction(
+                url="http://localhost:11434/api/embeddings",
+                model_name=self.embedding_model_name,
+                timeout=120,
+                max_retries=2
+            )
+            # 包装为安全函数，但迁移时启用错误抛出
+            safe_embedding_fn = SafeEmbeddingFunction(embedding_fn, raise_on_error=True)
+
             self.triple_store.migrate_from_legacy(
                 entity_index=self.entity_index,
                 relations=self.relations,
-                embedding_fn=self._embedding_fn,
+                embedding_fn=safe_embedding_fn,
                 doc_id=self.collection_name
             )
 

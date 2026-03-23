@@ -106,17 +106,23 @@ class SafeEmbeddingFunction:
     安全的 Embedding 函数包装器
 
     捕获所有异常，避免程序崩溃。
+    但在迁移模式下，需要抛出异常以便重试。
     """
 
-    def __init__(self, embedding_fn):
+    def __init__(self, embedding_fn, raise_on_error: bool = False):
         self.embedding_fn = embedding_fn
         self.fallback_used = False
+        self.raise_on_error = raise_on_error
 
     def __call__(self, input: List[str]) -> List[List[float]]:
         """安全调用 embedding 函数"""
         try:
             return self.embedding_fn(input)
         except Exception as e:
+            if self.raise_on_error:
+                # 迁移模式下抛出异常，让上层处理重试
+                raise
+            # 正常模式下打印错误并返回零向量
             print(f"      ⚠️ Embedding 调用失败: {e}")
             # 返回零向量作为 fallback
             # 假设 embedding 维度为 4096 (qwen3-embedding:8b)
