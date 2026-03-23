@@ -206,7 +206,8 @@ class GraphRAGService:
                 self.triple_store.migrate_from_legacy(
                     entity_index=self.entity_index,
                     relations=self.relations,
-                    embedding_fn=self._embedding_fn
+                    embedding_fn=self._embedding_fn,
+                    doc_id=self.collection_name
                 )
 
                 # 标记已迁移
@@ -243,7 +244,8 @@ class GraphRAGService:
             self.triple_store.migrate_from_legacy(
                 entity_index=self.entity_index,
                 relations=self.relations,
-                embedding_fn=self._embedding_fn
+                embedding_fn=self._embedding_fn,
+                doc_id=self.collection_name
             )
 
             # 标记已迁移

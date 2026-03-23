@@ -290,19 +290,48 @@ class TripleVectorStore:
             "relations": self.relation_store.count()
         }
 
+    def _get_migration_progress_path(self, doc_id: str) -> Path:
+        """获取迁移进度文件路径"""
+        return self.persist_dir / f".migration_progress_{doc_id}.json"
+
+    def _load_migration_progress(self, doc_id: str) -> Dict[str, Any]:
+        """加载迁移进度"""
+        progress_file = self._get_migration_progress_path(doc_id)
+        if progress_file.exists():
+            try:
+                with open(progress_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                pass
+        return {"migrated_entities": [], "migrated_relations": [], "entity_count": 0, "relation_count": 0}
+
+    def _save_migration_progress(self, doc_id: str, progress: Dict[str, Any]):
+        """保存迁移进度"""
+        progress_file = self._get_migration_progress_path(doc_id)
+        with open(progress_file, 'w', encoding='utf-8') as f:
+            json.dump(progress, f, ensure_ascii=False, indent=2)
+
+    def _clear_migration_progress(self, doc_id: str):
+        """清除迁移进度（迁移完成后）"""
+        progress_file = self._get_migration_progress_path(doc_id)
+        if progress_file.exists():
+            progress_file.unlink()
+
     def migrate_from_legacy(
         self,
         entity_index: Dict[str, Dict],
         relations: List[Any],
-        embedding_fn
+        embedding_fn,
+        doc_id: str = "default"
     ) -> bool:
         """
-        从旧版数据迁移
+        从旧版数据迁移（支持断点续传）
 
         Args:
             entity_index: 旧版实体索引
             relations: 旧版关系列表
             embedding_fn: Embedding 函数
+            doc_id: 文档ID，用于区分不同文档的迁移进度
 
         Returns:
             是否成功
@@ -310,91 +339,149 @@ class TripleVectorStore:
         import time
         print("🔄 开始从旧版数据迁移...")
 
-        migrated_count = 0
-        failed_count = 0
+        progress = self._load_migration_progress(doc_id)
+        migrated_entities_set = set(progress.get("migrated_entities", []))
+        migrated_relations_set = set(progress.get("migrated_relations", []))
 
-        # 1. 迁移实体
+        print(f"  📊 检测到之前的迁移进度:")
+        print(f"     - 已迁移实体: {len(migrated_entities_set)}")
+        print(f"     - 已迁移关系: {len(migrated_relations_set)}")
+
+        migrated_count = len(migrated_entities_set)
+        failed_count = 0
         total_entities = len(entity_index)
+
         print(f"  共 {total_entities} 个实体需要迁移")
 
-        for i, (entity_name, entity_data) in enumerate(entity_index.items(), 1):
-            try:
-                entity_type = entity_data.get("type", "未知")
-                entity_text = f"{entity_name} {entity_type}"
-                embedding = embedding_fn([entity_text])[0]
+        entities_to_migrate = [(name, data) for name, data in entity_index.items()
+                               if name not in migrated_entities_set]
 
-                entity_info = EntityInfo(
-                    name=entity_name,
-                    entity_type=entity_type,
-                    description=entity_text,
-                    source_ids=list(entity_data.get("doc_ids", set()))
-                )
+        for i, (entity_name, entity_data) in enumerate(entities_to_migrate, 1):
+            retry_count = 0
+            max_retries = 3
+            success = False
 
-                self.add_entity(entity_info, embedding)
-                migrated_count += 1
+            while retry_count < max_retries and not success:
+                try:
+                    entity_type = entity_data.get("type", "未知")
+                    entity_text = f"{entity_name} {entity_type}"
+                    embedding = embedding_fn([entity_text])[0]
 
-                # 每 10 个实体添加一个小延迟，避免请求过快
-                if i % 10 == 0:
-                    time.sleep(0.1)
+                    entity_info = EntityInfo(
+                        name=entity_name,
+                        entity_type=entity_type,
+                        description=entity_text,
+                        source_ids=list(entity_data.get("doc_ids", set()))
+                    )
 
-                if migrated_count % 50 == 0:
-                    print(f"  已迁移 {migrated_count}/{total_entities} 个实体...")
+                    self.add_entity(entity_info, embedding)
+                    migrated_entities_set.add(entity_name)
+                    migrated_count += 1
+                    success = True
 
-            except Exception as e:
-                failed_count += 1
-                if failed_count <= 3:  # 只显示前 3 个错误
-                    print(f"  ⚠️ 实体 {entity_name} 迁移失败: {e}")
-                elif failed_count == 4:
-                    print(f"  ⚠️ 更多实体迁移错误已省略...")
+                    if i % 10 == 0:
+                        time.sleep(0.1)
 
-        print(f"✅ 实体迁移完成: {migrated_count}/{total_entities} 个成功")
+                    if migrated_count % 20 == 0:
+                        self._save_migration_progress(doc_id, {
+                            "migrated_entities": list(migrated_entities_set),
+                            "migrated_relations": list(migrated_relations_set)
+                        })
+                        print(f"  💾 已保存进度: {migrated_count}/{total_entities} 个实体...")
 
-        # 2. 迁移关系
+                except Exception as e:
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        print(f"  ⏳ 重试 ({retry_count}/{max_retries}): {entity_name}")
+                        time.sleep(1)
+                    else:
+                        failed_count += 1
+                        if failed_count <= 3:
+                            print(f"  ⚠️ 实体 {entity_name} 迁移失败: {e}")
+
+        progress["migrated_entities"] = list(migrated_entities_set)
+        self._save_migration_progress(doc_id, progress)
+        print(f"✅ 实体迁移完成: {len(migrated_entities_set)}/{total_entities} 个成功")
+
         relation_count = 0
         failed_relations = 0
         total_relations = len(relations)
         print(f"  共 {total_relations} 个关系需要迁移")
 
-        for i, rel in enumerate(relations, 1):
-            try:
-                # 处理 Relation 对象或字典
-                if hasattr(rel, 'source'):
-                    source = rel.source
-                    target = rel.target
-                    relation = rel.relation
-                    confidence = rel.confidence
-                    doc_id = rel.doc_id
-                else:
-                    source = rel.get("source", "")
-                    target = rel.get("target", "")
-                    relation = rel.get("relation", "")
-                    confidence = rel.get("confidence", 0.5)
-                    doc_id = rel.get("doc_id", "")
+        relations_to_migrate = []
+        for rel in relations:
+            if hasattr(rel, 'source'):
+                rel_key = f"{rel.source}|{rel.relation}|{rel.target}"
+            else:
+                rel_key = f"{rel.get('source', '')}|{rel.get('relation', '')}|{rel.get('target', '')}"
 
-                relation_desc = f"{source} {relation} {target}"
-                embedding = embedding_fn([relation_desc])[0]
+            if rel_key not in migrated_relations_set:
+                relations_to_migrate.append((rel_key, rel))
 
-                relation_info = RelationInfo(
-                    source=source,
-                    target=target,
-                    relation=relation,
-                    description=relation_desc,
-                    confidence=confidence,
-                    source_ids=[doc_id] if doc_id else []
-                )
+        for i, (rel_key, rel) in enumerate(relations_to_migrate, 1):
+            retry_count = 0
+            max_retries = 3
+            success = False
 
-                self.add_relation(relation_info, embedding)
-                relation_count += 1
+            while retry_count < max_retries and not success:
+                try:
+                    if hasattr(rel, 'source'):
+                        source = rel.source
+                        target = rel.target
+                        relation = rel.relation
+                        confidence = rel.confidence
+                        doc_id_val = rel.doc_id
+                    else:
+                        source = rel.get("source", "")
+                        target = rel.get("target", "")
+                        relation = rel.get("relation", "")
+                        confidence = rel.get("confidence", 0.5)
+                        doc_id_val = rel.get("doc_id", "")
 
-                # 每 10 个关系添加一个小延迟
-                if i % 10 == 0:
-                    time.sleep(0.1)
+                    relation_desc = f"{source} {relation} {target}"
+                    embedding = embedding_fn([relation_desc])[0]
 
-            except Exception as e:
-                failed_relations += 1
-                if failed_relations <= 3:
-                    print(f"  ⚠️ 关系迁移失败: {e}")
+                    relation_info = RelationInfo(
+                        source=source,
+                        target=target,
+                        relation=relation,
+                        description=relation_desc,
+                        confidence=confidence,
+                        source_ids=[doc_id_val] if doc_id_val else []
+                    )
 
-        print(f"✅ 关系迁移完成: {relation_count}/{total_relations} 个成功")
+                    self.add_relation(relation_info, embedding)
+                    migrated_relations_set.add(rel_key)
+                    relation_count += 1
+                    success = True
+
+                    if i % 10 == 0:
+                        time.sleep(0.1)
+
+                    if relation_count % 20 == 0:
+                        progress["migrated_relations"] = list(migrated_relations_set)
+                        self._save_migration_progress(doc_id, progress)
+                        print(f"  💾 已保存进度: {relation_count}/{total_relations} 个关系...")
+
+                except Exception as e:
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        print(f"  ⏳ 重试关系 ({retry_count}/{max_retries})")
+                        time.sleep(1)
+                    else:
+                        failed_relations += 1
+                        if failed_relations <= 3:
+                            print(f"  ⚠️ 关系迁移失败: {e}")
+
+        progress["migrated_relations"] = list(migrated_relations_set)
+        self._save_migration_progress(doc_id, progress)
+
+        if failed_count == 0 and failed_relations == 0:
+            self._clear_migration_progress(doc_id)
+            print(f"✅ 关系迁移完成: {relation_count}/{total_relations} 个成功")
+            print(f"🎉 迁移全部完成，进度文件已清除！")
+        else:
+            print(f"⚠️ 关系迁移完成: {relation_count}/{total_relations} 个成功")
+            print(f"   重新运行 /index --migrate 可继续未完成的迁移")
 
         return migrated_count > 0 or relation_count > 0
