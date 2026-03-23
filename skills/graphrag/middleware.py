@@ -83,20 +83,9 @@ class GraphRAGMiddleware(AgentMiddleware):
         # 注意：只匹配用户输入，不匹配模型生成的内容
         kg_keywords = ['根据知识库', '查一下知识库', '知识库中', '文档中', '搜索文档']
         use_knowledge_base = any(kw in query for kw in kg_keywords)
-        
-        # 检查是否指定了分类（如"伤寒论知识库"、"XXX分类"）
-        # 如果指定了分类，让 LLM 调用 search_in_category 工具，中间件不拦截
-        category_keywords = ['知识库', '分类']
-        has_category = any(kw in query for kw in category_keywords)
 
         if not use_knowledge_base:
             # 默认不使用知识库，让模型自行处理
-            return None
-
-        if has_category:
-            # 用户指定了分类，让 LLM 调用 search_in_category 工具
-            if self.verbose:
-                print(f"📚 检测到分类查询请求，交由 Skill 工具处理...")
             return None
 
         if self.verbose:

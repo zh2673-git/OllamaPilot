@@ -70,22 +70,35 @@ class OllamaEmbeddingFunction:
         if len(text) > max_length:
             text = text[:max_length]
 
-        response = requests.post(
-            self.url,
-            json={"model": self.model_name, "prompt": text},
-            timeout=self.timeout
-        )
+        try:
+            response = requests.post(
+                self.url,
+                json={"model": self.model_name, "prompt": text},
+                timeout=self.timeout
+            )
 
-        if response.status_code != 200:
-            raise Exception(f"Embedding API 错误: {response.status_code}")
+            if response.status_code != 200:
+                # 提供更详细的错误信息
+                error_detail = ""
+                try:
+                    error_data = response.json()
+                    error_detail = f" - {error_data.get('error', '')}"
+                except:
+                    error_detail = f" - {response.text[:100]}"
+                raise Exception(f"Embedding API 错误 {response.status_code}{error_detail}")
 
-        data = response.json()
-        embedding = data.get("embedding", [])
+            data = response.json()
+            embedding = data.get("embedding", [])
 
-        if not embedding:
-            raise Exception("Embedding 返回为空")
+            if not embedding:
+                raise Exception("Embedding 返回为空")
 
-        return embedding
+            return embedding
+
+        except requests.exceptions.ConnectionError:
+            raise Exception(f"无法连接到 Ollama 服务 ({self.url})，请确认 Ollama 是否已启动")
+        except requests.exceptions.Timeout:
+            raise Exception(f"Embedding 请求超时 ({self.timeout}s)")
 
 
 class SafeEmbeddingFunction:

@@ -8,6 +8,7 @@ import sys
 import uuid
 import glob
 import time
+import json
 import asyncio
 import threading
 import logging
@@ -295,14 +296,17 @@ class OllamaPilotChat:
                     self.agent.context_builder.set_preloaded_history(history_messages, thread_id=self.current_session_id)
                     print(f"💾 已加载 {len(history_messages)} 条历史消息到 Context")
 
-            # 初始化文档管理器（手动控制模式）
+            # 初始化文档管理器（手动控制模式，启用LightRAG增强）
             if embedding_model:
                 from skills.graphrag.document_manager import DocumentManager
                 self.doc_manager = DocumentManager(
                     base_persist_dir=self.config.graph_rag_persist_dir,
-                    embedding_model=embedding_model
+                    embedding_model=embedding_model,
+                    enable_relation_vector=True,   # 启用关系向量化
+                    enable_dual_retrieval=True,    # 启用双层检索
+                    use_llm_merge=False            # 小模型建议关闭LLM合并
                 )
-                print(f"📚 文档管理器已加载（手动控制模式）")
+                print(f"📚 文档管理器已加载（手动控制模式，LightRAG增强已启用）")
                 print(f"   使用 /index 命令手动索引文档")
                 print(f"   使用 /resume 恢复失败的索引")
             
@@ -322,9 +326,9 @@ class OllamaPilotChat:
         if not self.doc_manager:
             print("❌ 文档管理器未初始化（可能没有配置Embedding模型）")
             return False
-        
+
         path = Path(doc_path)
-        
+
         # 处理文件夹
         if path.is_dir():
             return self._index_directory_async(doc_path) if async_mode else self._index_directory_sync(doc_path)
@@ -362,7 +366,109 @@ class OllamaPilotChat:
         except Exception as e:
             print(f"❌ 索引失败: {e}")
             return False
-    
+
+    def _check_and_migrate_legacy_data(self):
+        """检查并迁移旧版数据到三重向量存储"""
+        if not self.doc_manager:
+            return
+
+        base_dir = Path(self.doc_manager.base_persist_dir)
+        if not base_dir.exists():
+            return
+
+        # 查找所有包含旧版数据但未迁移的文档目录
+        migrated_flag = "migrated_{}.flag"
+        needs_migration = []
+
+        for item in base_dir.iterdir():
+            if not item.is_dir():
+                continue
+
+            # 检查是否有旧版 index_*.json 文件
+            index_files = list(item.glob("index_*.json"))
+            if not index_files:
+                continue
+
+            # 检查是否已迁移
+            model_name = index_files[0].stem.replace("index_", "")
+            flag_file = item / migrated_flag.format(model_name)
+
+            if flag_file.exists():
+                continue  # 已迁移
+
+            # 检查是否有实体数据需要迁移
+            try:
+                with open(index_files[0], 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if data.get("entity_index") or data.get("relations"):
+                        needs_migration.append((item, model_name))
+            except Exception:
+                continue
+
+        if not needs_migration:
+            return
+
+        print(f"\n🔄 检测到 {len(needs_migration)} 个文档需要数据迁移...")
+        print("   升级到 LightRAG 三重向量存储格式")
+        print("\n   文档列表:")
+        for i, (doc_dir, _) in enumerate(needs_migration[:5], 1):
+            print(f"     {i}. {doc_dir.name}")
+        if len(needs_migration) > 5:
+            print(f"     ... 还有 {len(needs_migration) - 5} 个文档")
+
+        confirm = input(f"\n是否开始迁移? (y/n): ").strip().lower()
+        if confirm != 'y':
+            print("   已取消迁移")
+            return
+
+        print("\n   开始迁移...\n")
+
+        migrated_count = 0
+        import time
+
+        for doc_dir, model_name in needs_migration:
+            try:
+                print(f"  📄 迁移: {doc_dir.name}")
+
+                # 创建 GraphRAGService
+                from skills.graphrag.services import GraphRAGService
+                graph_service = GraphRAGService(
+                    persist_dir=str(doc_dir),
+                    embedding_model=model_name,
+                    enable_relation_vector=True,
+                    enable_dual_retrieval=True,
+                    use_llm_merge=False
+                )
+
+                # 手动触发迁移
+                migrated = graph_service.check_and_migrate()
+
+                # 检查迁移结果
+                stats = graph_service.get_stats()
+                if stats.get("triple_store"):
+                    triple_stats = stats["triple_store"]
+                    if migrated:
+                        print(f"     ✅ 完成: {triple_stats['entities']} 实体, {triple_stats['relations']} 关系")
+                        migrated_count += 1
+                    elif triple_stats["entities"] > 0 or triple_stats["relations"] > 0:
+                        print(f"     ✅ 已迁移: {triple_stats['entities']} 实体, {triple_stats['relations']} 关系")
+                    else:
+                        print(f"     ⏭️  跳过: 无需迁移")
+                else:
+                    print(f"     ⏭️  跳过: 三重存储未启用")
+
+                # 添加延迟，避免并发请求 Ollama
+                time.sleep(0.5)
+
+            except Exception as e:
+                print(f"     ⚠️  失败: {e}")
+                # 失败后等待更长时间
+                time.sleep(1)
+
+        if migrated_count > 0:
+            print(f"\n✅ 数据迁移完成: {migrated_count}/{len(needs_migration)} 个文档")
+        print()
+
     def _index_directory_async(self, dir_path: str) -> bool:
         """异步索引整个文件夹（不阻塞对话）"""
         print(f"\n📁 索引文件夹: {dir_path}")
@@ -591,7 +697,10 @@ class OllamaPilotChat:
                 from skills.graphrag.document_manager import DocumentManager
                 self.doc_manager = DocumentManager(
                     base_persist_dir=self.config.graph_rag_persist_dir,
-                    embedding_model=embedding_model
+                    embedding_model=embedding_model,
+                    enable_relation_vector=True,   # 启用关系向量化
+                    enable_dual_retrieval=True,    # 启用双层检索
+                    use_llm_merge=False            # 小模型建议关闭LLM合并
                 )
             else:
                 self.doc_manager = None
@@ -1148,7 +1257,32 @@ class OllamaPilotChat:
             if arg1:
                 self.index_document(arg1)
             else:
-                default_kb = Path("./knowledge_base")
+                # 首先检查是否有旧版数据需要迁移
+                # 添加 --migrate 参数强制迁移，否则询问用户
+                if arg1 == '--migrate' or arg1 == '-m':
+                    self._check_and_migrate_legacy_data()
+                else:
+                    # 检查是否需要迁移
+                    base_dir = Path(self.doc_manager.base_persist_dir) if self.doc_manager else None
+                    if base_dir and base_dir.exists():
+                        needs_check = False
+                        for item in base_dir.iterdir():
+                            if item.is_dir():
+                                index_files = list(item.glob("index_*.json"))
+                                if index_files:
+                                    model_name = index_files[0].stem.replace("index_", "")
+                                    flag_file = item / f"migrated_{model_name}.flag"
+                                    if not flag_file.exists():
+                                        needs_check = True
+                                        break
+
+                        if needs_check:
+                            print("\n💡 提示: 检测到可能需要数据迁移")
+                            print("   运行 '/index --migrate' 可迁移旧数据到 LightRAG 格式")
+                            print("   跳过迁移不影响正常索引新文档\n")
+
+                # 然后检查 knowledge_base 文件夹
+                default_kb = Path("./data/knowledge_base")
                 if default_kb.exists() and default_kb.is_dir():
                     files = self._get_files_in_directory(str(default_kb))
                     if files:
@@ -1170,7 +1304,7 @@ class OllamaPilotChat:
                     print("  2. 选择其他文件夹")
                     print("  3. 取消")
                     choice = input("\n请选择 (1-3): ").strip()
-                    
+
                     if choice == '1':
                         default_kb.mkdir(parents=True, exist_ok=True)
                         print(f"✅ 已创建文件夹: {default_kb}")

@@ -1,10 +1,12 @@
 """
-GraphRAG 服务层 - 混合存储实现
+GraphRAG 服务层 - 混合存储实现（LightRAG 增强版）
 
 提供混合存储能力：
 - 向量存储：SimpleVectorStore（SQLite + 内存向量）
 - 实体索引：内存中的实体-文档映射
 - 关系索引：内存中的关系存储
+- 三重向量存储：实体 + 关系 + 文本块（LightRAG 增强）
+- 双层检索：Local + Global（LightRAG 增强）
 """
 
 from typing import List, Dict, Optional, Tuple, Set, Any
@@ -12,11 +14,15 @@ from pathlib import Path
 import json
 import hashlib
 import math
+import os
 from dataclasses import dataclass, asdict
 
 from skills.graphrag.services.embedding_function import OllamaEmbeddingFunction, SafeEmbeddingFunction
 from skills.graphrag.services.simple_embedding import HashEmbeddingFunction
 from skills.graphrag.services.simple_vector_store import SimpleVectorStore
+from skills.graphrag.services.triple_vector_store import TripleVectorStore, EntityInfo, RelationInfo
+from skills.graphrag.services.dual_retrieval import DualRetrievalService, RetrievalResult, ContextFusionConfig
+from skills.graphrag.services.incremental_merger import IncrementalMerger, MergeConfig
 
 
 @dataclass
@@ -27,7 +33,7 @@ class Entity:
     positions: List[Tuple[int, int]]  # 在文档中的位置 (start, end)
     alignment_status: Optional[str] = None  # 对齐状态: exact/fuzzy/lesser/unmatched
     similarity: float = 1.0  # 相似度（模糊匹配时）
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
@@ -51,19 +57,24 @@ class Relation:
 
 class GraphRAGService:
     """
-    GraphRAG 服务
+    GraphRAG 服务（LightRAG 增强版）
 
     提供混合存储能力：
     - 向量存储：SimpleVectorStore（SQLite + 内存向量）
     - 实体索引：内存中的实体-文档映射
     - 关系索引：内存中的关系存储
+    - 三重向量存储：实体 + 关系 + 文本块（LightRAG 新增）
+    - 双层检索：Local + Global（LightRAG 新增）
     """
 
     def __init__(
         self,
         persist_dir: str = "./data/graphrag",
         embedding_model: Optional[str] = None,
-        collection_name: str = "graphrag_default"
+        collection_name: str = "graphrag_default",
+        enable_relation_vector: bool = True,
+        enable_dual_retrieval: bool = True,
+        use_llm_merge: bool = False
     ):
         """
         初始化 GraphRAG 服务
@@ -72,10 +83,17 @@ class GraphRAGService:
             persist_dir: 持久化目录
             embedding_model: Ollama Embedding 模型名称（如 "qwen3-embedding:4b"）
             collection_name: 集合名称（保留参数，实际不使用）
+            enable_relation_vector: 是否启用关系向量化（默认 True）
+            enable_dual_retrieval: 是否启用双层检索（默认 True）
+            use_llm_merge: 是否使用 LLM 智能合并（默认 False，小模型建议关闭）
         """
         self.persist_dir = Path(persist_dir)
         self.persist_dir.mkdir(parents=True, exist_ok=True)
         self.embedding_model_name = embedding_model
+
+        # 功能开关
+        self.enable_relation_vector = enable_relation_vector
+        self.enable_dual_retrieval = enable_dual_retrieval
 
         # 根据 embedding 模型名称生成集合名称（用于隔离不同模型的向量）
         if embedding_model:
@@ -103,8 +121,44 @@ class GraphRAGService:
         # 本体定义
         self.ontology: Optional[Dict] = None
 
+        # ========== LightRAG 增强功能 ==========
+
+        # 三重向量存储（实体 + 关系 + 文本块）
+        self.triple_store: Optional[TripleVectorStore] = None
+        if enable_relation_vector:
+            self.triple_store = TripleVectorStore(
+                persist_dir=persist_dir,
+                collection_name=self.collection_name
+            )
+
+        # 双层检索服务
+        self.retrieval_service: Optional[DualRetrievalService] = None
+        if enable_dual_retrieval and self.triple_store:
+            self.retrieval_service = DualRetrievalService(
+                triple_store=self.triple_store,
+                embedding_fn=self._embedding_fn,
+                config={
+                    "local_top_k": 30,
+                    "global_top_k": 30,
+                    "chunk_top_k": 10
+                }
+            )
+
+        # 增量合并服务
+        self.incremental_merger: Optional[IncrementalMerger] = None
+        if self.triple_store:
+            self.incremental_merger = IncrementalMerger(
+                triple_store=self.triple_store,
+                embedding_fn=self._embedding_fn,
+                llm_client=None,  # 可选，需要时传入
+                config=MergeConfig(use_llm_merge=use_llm_merge)
+            )
+
         # 加载已有数据
         self._load_index()
+
+        # 注意：自动迁移已禁用，使用 /index 命令手动触发迁移
+        # self._check_and_migrate()
 
     def _get_embedding_function(self):
         """获取 Embedding 函数"""
@@ -128,6 +182,79 @@ class GraphRAGService:
         else:
             # 没有指定 embedding 模型，使用简单 embedding
             return HashEmbeddingFunction(dim=384)
+
+    def _check_and_migrate(self):
+        """检查并迁移旧数据（内部方法，初始化时调用）"""
+        if not self.triple_store:
+            return
+
+        # 检查是否有旧数据需要迁移
+        migration_flag = self.persist_dir / f"migrated_{self.collection_name}.flag"
+
+        if migration_flag.exists():
+            return  # 已经迁移过
+
+        if not self.entity_index and not self.relations:
+            return  # 没有旧数据
+
+        # 检查 triple_store 是否为空
+        stats = self.triple_store.get_stats()
+        if stats["entities"] == 0 and stats["relations"] == 0:
+            print("🔄 检测到旧版数据，开始迁移到三重向量存储...")
+
+            try:
+                self.triple_store.migrate_from_legacy(
+                    entity_index=self.entity_index,
+                    relations=self.relations,
+                    embedding_fn=self._embedding_fn
+                )
+
+                # 标记已迁移
+                with open(migration_flag, 'w') as f:
+                    f.write("migrated")
+
+                print("✅ 数据迁移完成")
+
+            except Exception as e:
+                print(f"⚠️ 数据迁移失败: {e}")
+
+    def check_and_migrate(self) -> bool:
+        """
+        手动触发迁移检查（供外部调用）
+
+        Returns:
+            是否进行了迁移
+        """
+        if not self.triple_store:
+            return False
+
+        migration_flag = self.persist_dir / f"migrated_{self.collection_name}.flag"
+        if migration_flag.exists():
+            return False  # 已迁移
+
+        if not self.entity_index and not self.relations:
+            return False  # 没有旧数据
+
+        stats = self.triple_store.get_stats()
+        if stats["entities"] > 0 or stats["relations"] > 0:
+            return False  # 已有数据，无需迁移
+
+        try:
+            self.triple_store.migrate_from_legacy(
+                entity_index=self.entity_index,
+                relations=self.relations,
+                embedding_fn=self._embedding_fn
+            )
+
+            # 标记已迁移
+            with open(migration_flag, 'w') as f:
+                f.write("migrated")
+
+            return True
+
+        except Exception as e:
+            print(f"⚠️ 数据迁移失败: {e}")
+            return False
 
     def set_ontology(self, ontology: Dict):
         """设置本体定义"""
@@ -190,6 +317,15 @@ class GraphRAGService:
                 embeddings=[embedding] if embedding else None
             )
 
+            # 同时添加到 triple_store 的 chunk 存储
+            if self.triple_store and embedding:
+                self.triple_store.add_chunk(
+                    chunk_id=doc_id,
+                    text=text,
+                    embedding=embedding,
+                    metadata=doc_metadata
+                )
+
             elapsed = time.time() - start_time
             if elapsed > 5:
                 print(f"      ⚠️ 存储耗时较长: {elapsed:.1f}s (embedding: {embed_time:.1f}s)")
@@ -201,6 +337,10 @@ class GraphRAGService:
         if entities:
             for entity in entities:
                 self._index_entity(entity, doc_id)
+
+                # 添加到 triple_store 的实体存储
+                if self.triple_store:
+                    self._add_entity_to_triple_store(entity, doc_id)
 
         # 5. 推断关系
         if entities and len(entities) > 1:
@@ -217,6 +357,27 @@ class GraphRAGService:
             }
         self.entity_index[entity.name]["doc_ids"].add(doc_id)
 
+    def _add_entity_to_triple_store(self, entity: Entity, doc_id: str):
+        """添加实体到三重向量存储"""
+        if not self.triple_store:
+            return
+
+        try:
+            entity_text = f"{entity.name} {entity.type}"
+            embedding = self._embedding_fn([entity_text])[0]
+
+            entity_info = EntityInfo(
+                name=entity.name,
+                entity_type=entity.type,
+                description=entity_text,
+                source_ids=[doc_id]
+            )
+
+            self.triple_store.add_entity(entity_info, embedding)
+
+        except Exception as e:
+            print(f"⚠️ 实体向量化失败: {e}")
+
     def _infer_relations(self, entities: List[Entity], doc_id: str):
         """推断实体间关系（基于共现）"""
         entity_names = [e.name for e in entities]
@@ -232,6 +393,33 @@ class GraphRAGService:
                     doc_id=doc_id
                 )
                 self.relations.append(relation)
+
+                # 添加到 triple_store 的关系存储
+                if self.triple_store:
+                    self._add_relation_to_triple_store(relation, doc_id)
+
+    def _add_relation_to_triple_store(self, relation: Relation, doc_id: str):
+        """添加关系到三重向量存储"""
+        if not self.triple_store:
+            return
+
+        try:
+            relation_desc = f"{relation.source} 与 {relation.target} 相关"
+            embedding = self._embedding_fn([relation_desc])[0]
+
+            relation_info = RelationInfo(
+                source=relation.source,
+                target=relation.target,
+                relation=relation.relation,
+                description=relation_desc,
+                confidence=relation.confidence,
+                source_ids=[doc_id]
+            )
+
+            self.triple_store.add_relation(relation_info, embedding)
+
+        except Exception as e:
+            print(f"⚠️ 关系向量化失败: {e}")
 
     def get_entity_documents(self, entity_name: str) -> List[str]:
         """获取包含实体的文档ID列表"""
@@ -405,6 +593,40 @@ class GraphRAGService:
             print(f"⚠️ 向量检索失败: {e}")
             return []
 
+    def dual_retrieval_search(
+        self,
+        query: str,
+        mode: str = "mix",
+        local_top_k: int = 30,
+        global_top_k: int = 30
+    ) -> RetrievalResult:
+        """
+        双层检索（LightRAG 增强）
+
+        Args:
+            query: 查询文本
+            mode: 检索模式 ("local" | "global" | "mix")
+            local_top_k: Local 检索返回数量
+            global_top_k: Global 检索返回数量
+
+        Returns:
+            检索结果
+        """
+        if not self.retrieval_service:
+            print("⚠️ 双层检索服务未启用，返回空结果")
+            return RetrievalResult()
+
+        try:
+            return self.retrieval_service.hybrid_retrieval(
+                query=query,
+                mode=mode,
+                local_top_k=local_top_k,
+                global_top_k=global_top_k
+            )
+        except Exception as e:
+            print(f"⚠️ 双层检索失败: {e}")
+            return RetrievalResult()
+
     def _save_index(self):
         """保存索引到文件（按模型隔离）"""
         index_path = self.persist_dir / f"index_{self.collection_name}.json"
@@ -461,14 +683,25 @@ class GraphRAGService:
 
     def get_stats(self) -> Dict:
         """获取统计信息"""
-        return {
+        stats = {
             "total_documents": self.collection.count(),
             "total_entities": len(self.entity_index),
             "total_relations": len(self.relations),
             "entity_types": list(set(
                 info["type"] for info in self.entity_index.values()
-            )) if self.entity_index else []
+            )) if self.entity_index else [],
+            "features": {
+                "relation_vector": self.enable_relation_vector,
+                "dual_retrieval": self.enable_dual_retrieval
+            }
         }
+
+        # 添加 triple_store 统计
+        if self.triple_store:
+            triple_stats = self.triple_store.get_stats()
+            stats["triple_store"] = triple_stats
+
+        return stats
 
     def enhanced_search(
         self,

@@ -93,7 +93,10 @@ class GraphRAGSkill(Skill):
         enable_word_aligner: Optional[bool] = None,
         fuzzy_threshold: Optional[float] = None,
         use_config: bool = True,
-        model_name: Optional[str] = None
+        model_name: Optional[str] = None,
+        enable_relation_vector: bool = True,
+        enable_dual_retrieval: bool = True,
+        use_llm_merge: bool = False
     ):
         """
         初始化 GraphRAG Skill
@@ -107,11 +110,14 @@ class GraphRAGSkill(Skill):
             fuzzy_threshold: 模糊匹配阈值，默认从 .env 读取
             use_config: 是否使用配置文件
             model_name: 主模型名称（用于动态上下文判断）
+            enable_relation_vector: 是否启用关系向量化（默认True，LightRAG增强）
+            enable_dual_retrieval: 是否启用双层检索（默认True，LightRAG增强）
+            use_llm_merge: 是否使用LLM智能合并（默认False，小模型建议关闭）
         """
         super().__init__()
-        
+
         self.model_name = model_name
-        
+
         # 从配置文件获取默认值
         if use_config:
             self.embedding_model = embedding_model or config.embedding_model
@@ -125,8 +131,11 @@ class GraphRAGSkill(Skill):
             self.knowledge_base_dir = knowledge_base_dir or "./knowledge_base"
             self.enable_word_aligner = enable_word_aligner if enable_word_aligner is not None else True
             self.fuzzy_threshold = fuzzy_threshold if fuzzy_threshold is not None else 0.75
-            
+
         self.enable_auto_retrieval = enable_auto_retrieval
+        self.enable_relation_vector = enable_relation_vector
+        self.enable_dual_retrieval = enable_dual_retrieval
+        self.use_llm_merge = use_llm_merge
         self._indexing_thread = None
         self._indexing_status = {"running": False, "total": 0, "completed": 0, "failed": 0}
 
@@ -139,10 +148,13 @@ class GraphRAGSkill(Skill):
     def _init_services(self):
         """初始化 GraphRAG 服务"""
         try:
-            # 创建服务实例
+            # 创建服务实例（启用 LightRAG 增强功能）
             self.graph_service = GraphRAGService(
                 persist_dir=self.persist_dir,
-                embedding_model=self.embedding_model
+                embedding_model=self.embedding_model,
+                enable_relation_vector=self.enable_relation_vector,
+                enable_dual_retrieval=self.enable_dual_retrieval,
+                use_llm_merge=self.use_llm_merge
             )
             # 使用混合实体抽取器（支持词典+LLM）
             self.entity_extractor = HybridEntityExtractor(persist_dir=self.persist_dir)
@@ -452,7 +464,23 @@ class GraphRAGSkill(Skill):
             stats = self.graph_service.get_stats()
             print(f"📊 GraphRAG 状态: {stats['total_documents']} 文档, "
                   f"{stats['total_entities']} 实体, {stats['total_relations']} 关系")
-            
+
+            # 显示 LightRAG 增强功能状态
+            features = stats.get('features', {})
+            if features.get('relation_vector') or features.get('dual_retrieval'):
+                feature_status = []
+                if features.get('relation_vector'):
+                    feature_status.append("关系向量")
+                if features.get('dual_retrieval'):
+                    feature_status.append("双层检索")
+                print(f"   ✨ LightRAG: {', '.join(feature_status)} 已启用")
+
+            # 显示 Triple Store 统计
+            if 'triple_store' in stats:
+                triple = stats['triple_store']
+                print(f"   📦 TripleStore: {triple.get('entities', 0)} 实体向量, "
+                      f"{triple.get('relations', 0)} 关系向量")
+
             # 显示 WordAligner 对齐统计
             if self.enable_word_aligner and self.kb_manager:
                 alignment_stats = self.kb_manager.get_alignment_stats()

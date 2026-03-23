@@ -154,6 +154,23 @@ class OllamaPilotAgent:
         if skills_dir:
             skill_count = self.skill_registry.discover_skills(skills_dir)
 
+        # 注册 GraphRAG Skill（Python Skill，不是 Markdown Skill）
+        if embedding_model:
+            try:
+                from skills.graphrag.skill import GraphRAGSkill
+                graphrag_skill = GraphRAGSkill(
+                    embedding_model=embedding_model,
+                    model_name=model_name,
+                    enable_relation_vector=True,
+                    enable_dual_retrieval=True,
+                    use_llm_merge=False
+                )
+                self.skill_registry.register(graphrag_skill)
+                skill_count += 1
+            except Exception as e:
+                if verbose:
+                    print(f"⚠️ GraphRAG Skill 注册失败: {e}")
+
         self.all_tools = self._get_all_tools()
 
         if checkpointer:
@@ -334,6 +351,22 @@ class OllamaPilotAgent:
 
         return allowed
 
+    def _get_skill_middleware(self):
+        """获取当前激活 Skill 的中间件（如 GraphRAGMiddleware）"""
+        if not self._active_skill_name:
+            return None
+
+        skill = self.skill_registry.get_skill(self._active_skill_name)
+        if skill and hasattr(skill, 'get_middleware'):
+            try:
+                middleware = skill.get_middleware()
+                if middleware:
+                    return middleware
+            except Exception as e:
+                logger.warning(f"获取 Skill 中间件失败: {e}")
+
+        return None
+
     def _filter_tool_calls(self, messages: List[Any]) -> List[Any]:
         """过滤不允许的工具调用"""
         allowed = self._get_allowed_tools()
@@ -369,6 +402,12 @@ class OllamaPilotAgent:
 
         skill = self._select_skill(query)
 
+        # 设置当前激活的 skill（用于中间件和工具过滤）
+        if skill:
+            self._active_skill_name = skill.name
+            if self.verbose:
+                print(f"🎯 激活 Skill: {skill.name}")
+
         if skill and self.memory_manager:
             self.memory_manager.record_skill_usage(skill.name, context=query[:100])
 
@@ -377,7 +416,8 @@ class OllamaPilotAgent:
             "recursion_limit": self.max_tool_calls + 10
         }
 
-        if not hasattr(self, '_agent') or self._agent is None:
+        # 如果 skill 改变，需要重新创建 agent 以加载新的中间件
+        if not hasattr(self, '_agent') or self._agent is None or skill:
             self._agent = self._create_agent()
 
         # MemorySaver 会自动管理历史，只需传入当前消息
@@ -432,6 +472,11 @@ class OllamaPilotAgent:
 
             if hasattr(self, 'compactor') and self.compactor:
                 middlewares.append(CompactionMiddleware(self.compactor))
+
+            # 添加 Skill 的中间件（如 GraphRAGMiddleware）
+            skill_middleware = self._get_skill_middleware()
+            if skill_middleware:
+                middlewares.append(skill_middleware)
 
             middlewares.append(ToolRetryMiddleware(max_retries=2))
             middlewares.append(ToolCallLimitMiddleware(run_limit=self.max_tool_calls))

@@ -57,7 +57,10 @@ class DocumentManager:
         base_persist_dir: str = "./data/graphrag",
         embedding_model: Optional[str] = None,
         progress_callback: Optional[Callable[[str, float, str], None]] = None,
-        batch_size: int = 20
+        batch_size: int = 20,
+        enable_relation_vector: bool = True,
+        enable_dual_retrieval: bool = True,
+        use_llm_merge: bool = False
     ):
         """
         初始化文档管理器
@@ -67,12 +70,18 @@ class DocumentManager:
             embedding_model: Embedding模型名称
             progress_callback: 进度回调函数(doc_id, progress, message)
             batch_size: 批量处理大小（默认20，可配置）
+            enable_relation_vector: 是否启用关系向量化（默认True，LightRAG增强）
+            enable_dual_retrieval: 是否启用双层检索（默认True，LightRAG增强）
+            use_llm_merge: 是否使用LLM智能合并（默认False，小模型建议关闭）
         """
         self.base_persist_dir = Path(base_persist_dir)
         self.base_persist_dir.mkdir(parents=True, exist_ok=True)
         self.embedding_model = embedding_model
         self.progress_callback = progress_callback
         self.batch_size = batch_size
+        self.enable_relation_vector = enable_relation_vector
+        self.enable_dual_retrieval = enable_dual_retrieval
+        self.use_llm_merge = use_llm_merge
 
         # 文档信息存储
         self.documents: Dict[str, DocumentInfo] = {}
@@ -299,7 +308,10 @@ class DocumentManager:
             progress_callback(0.1, "初始化服务...")
             graph_service = GraphRAGService(
                 persist_dir=str(storage_path),
-                embedding_model=doc_info.model_name
+                embedding_model=doc_info.model_name,
+                enable_relation_vector=self.enable_relation_vector,
+                enable_dual_retrieval=self.enable_dual_retrieval,
+                use_llm_merge=self.use_llm_merge
             )
 
             # 初始化混合实体抽取器（加载全局预设词典 + 文档私有词典）
