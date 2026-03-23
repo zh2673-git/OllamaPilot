@@ -1259,26 +1259,24 @@ class OllamaPilotChat:
             elif arg1 in ['--migrate', '-m']:
                 self._check_and_migrate_legacy_data()
             else:
-                    # 检查是否需要迁移
-                    base_dir = Path(self.doc_manager.base_persist_dir) if self.doc_manager else None
-                    if base_dir and base_dir.exists():
-                        needs_check = False
-                        for item in base_dir.iterdir():
-                            if item.is_dir():
-                                index_files = list(item.glob("index_*.json"))
-                                if index_files:
-                                    model_name = index_files[0].stem.replace("index_", "")
-                                    flag_file = item / f"migrated_{model_name}.flag"
-                                    if not flag_file.exists():
-                                        needs_check = True
-                                        break
+                base_dir = Path(self.doc_manager.base_persist_dir) if self.doc_manager else None
+                if base_dir and base_dir.exists():
+                    needs_check = False
+                    for item in base_dir.iterdir():
+                        if item.is_dir():
+                            index_files = list(item.glob("index_*.json"))
+                            if index_files:
+                                model_name = index_files[0].stem.replace("index_", "")
+                                flag_file = item / f"migrated_{model_name}.flag"
+                                if not flag_file.exists():
+                                    needs_check = True
+                                    break
 
-                        if needs_check:
-                            print("\n💡 提示: 检测到可能需要数据迁移")
-                            print("   运行 '/index --migrate' 可迁移旧数据到 LightRAG 格式")
-                            print("   跳过迁移不影响正常索引新文档\n")
+                    if needs_check:
+                        print("\n💡 提示: 检测到可能需要数据迁移")
+                        print("   运行 '/index --migrate' 可迁移旧数据到 LightRAG 格式")
+                        print("   跳过迁移不影响正常索引新文档\n")
 
-                # 然后检查 knowledge_base 文件夹
                 default_kb = Path("./data/knowledge_base")
                 if default_kb.exists() and default_kb.is_dir():
                     files = self._get_files_in_directory(str(default_kb))
