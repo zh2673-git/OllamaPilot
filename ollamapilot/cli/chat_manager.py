@@ -1254,14 +1254,11 @@ class OllamaPilotChat:
             self.list_documents()
         
         elif cmd == '/index':
-            if arg1:
+            if arg1 and arg1 not in ['--migrate', '-m']:
                 self.index_document(arg1)
+            elif arg1 in ['--migrate', '-m']:
+                self._check_and_migrate_legacy_data()
             else:
-                # 首先检查是否有旧版数据需要迁移
-                # 添加 --migrate 参数强制迁移，否则询问用户
-                if arg1 == '--migrate' or arg1 == '-m':
-                    self._check_and_migrate_legacy_data()
-                else:
                     # 检查是否需要迁移
                     base_dir = Path(self.doc_manager.base_persist_dir) if self.doc_manager else None
                     if base_dir and base_dir.exists():
