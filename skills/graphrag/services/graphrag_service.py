@@ -9,7 +9,7 @@ GraphRAG 服务层 - 混合存储实现（LightRAG 增强版）
 - 双层检索：Local + Global（LightRAG 增强）
 """
 
-from typing import List, Dict, Optional, Tuple, Set, Any
+from typing import List, Dict, Optional, Tuple, Set, Any, Callable
 from pathlib import Path
 import json
 import hashlib
