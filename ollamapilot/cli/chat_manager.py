@@ -1202,8 +1202,9 @@ class OllamaPilotChat:
         if not command.startswith('/'):
             return False
         
-        parts = command.split(maxsplit=2)
+        parts = command.split()
         cmd = parts[0].lower()
+        args = parts[1:] if len(parts) > 1 else []
         arg1 = parts[1] if len(parts) > 1 else None
         arg2 = parts[2] if len(parts) > 2 else None
         
