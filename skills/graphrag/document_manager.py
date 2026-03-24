@@ -430,17 +430,21 @@ class DocumentManager:
             total_chunks = len(chunks)
             completed_chunks_set = set(doc_info.completed_chunks) if doc_info.completed_chunks else set()
             skipped_chunks = 0
-            
-            # 预生成所有块的 embedding（批量处理，避免逐个调用API）
+
+            # 预生成所有 embedding（块 + 实体 + 关系）
             chunk_embeddings = {}
+            entity_embeddings = {}  # chunk_idx -> list of embeddings
+            relation_data = {}  # chunk_idx -> list of (source, target, relation_text)
+
             chunks_to_embed = []
             chunk_indices_to_embed = []
-            
-            for i, _ in enumerate(batch_results):
+
+            for i, (entities, relations) in enumerate(batch_results):
                 if i not in completed_chunks_set:
                     chunks_to_embed.append(chunks[i])
                     chunk_indices_to_embed.append(i)
 
+            # 1. 批量生成 chunk embedding
             if chunks_to_embed and graph_service._embedding_fn:
                 logger.info(f"[{doc_info.name}] 批量生成 {len(chunks_to_embed)} 个块的 embedding...")
                 progress_callback(0.95, f"生成 {len(chunks_to_embed)} 个块的向量...")
@@ -456,37 +460,68 @@ class DocumentManager:
                         chunk_embeddings[idx] = embedding
                         embedded_count += 1
 
-                    # 更新进度
                     embed_progress = 0.95 + (0.04 * embedded_count / len(chunks_to_embed))
                     progress_callback(embed_progress, f"生成向量 {embedded_count}/{len(chunks_to_embed)}...")
                     logger.info(f"[{doc_info.name}] Embedding进度: {embedded_count}/{len(chunks_to_embed)}")
 
-                logger.info(f"[{doc_info.name}] 完成 embedding 生成，共 {embedded_count} 个")
-            
+                logger.info(f"[{doc_info.name}] 完成 chunk embedding 生成，共 {embedded_count} 个")
+
+            # 2. 准备实体和关系数据，并批量生成 embedding
+            entity_texts = []  # (chunk_idx, entity_idx, entity_text)
+            relation_texts = []  # (chunk_idx, relation_idx, relation_text)
+
             for i, (entities, relations) in enumerate(batch_results):
-                # 断点续传：跳过已完成的块
+                if i in completed_chunks_set:
+                    continue
+
+                for entity in entities:
+                    entity_text = f"{entity.name} {entity.type}"
+                    entity_texts.append((i, len(entity_embeddings.get(i, [])), entity_text))
+
+                for rel in relations:
+                    rel_text = f"{rel.source} 与 {rel.target} 相关"
+                    relation_texts.append((i, len(relation_data.get(i, [])), rel_text))
+
+            # 3. 批量生成 entity embeddings
+            if entity_texts and graph_service._embedding_fn:
+                logger.info(f"[{doc_info.name}] 批量生成 {len(entity_texts)} 个实体的 embedding...")
+                entity_batch_size = 100
+                for batch_start in range(0, len(entity_texts), entity_batch_size):
+                    batch_end = min(batch_start + entity_batch_size, len(entity_texts))
+                    batch_texts = [t[2] for t in entity_texts[batch_start:batch_end]]
+
+                    embeddings = graph_service._embedding_fn(batch_texts)
+                    for j, (chunk_idx, entity_idx, _) in enumerate(entity_texts[batch_start:batch_end]):
+                        if chunk_idx not in entity_embeddings:
+                            entity_embeddings[chunk_idx] = []
+                        entity_embeddings[chunk_idx].append(embeddings[j])
+
+            # 4. 批量生成 relation embeddings
+            if relation_texts and graph_service._embedding_fn:
+                logger.info(f"[{doc_info.name}] 批量生成 {len(relation_texts)} 个关系的 embedding...")
+                relation_batch_size = 100
+                for batch_start in range(0, len(relation_texts), relation_batch_size):
+                    batch_end = min(batch_start + relation_batch_size, len(relation_texts))
+                    batch_texts = [t[2] for t in relation_texts[batch_start:batch_end]]
+
+                    embeddings = graph_service._embedding_fn(batch_texts)
+                    for j, (chunk_idx, rel_idx, rel_text) in enumerate(relation_texts[batch_start:batch_end]):
+                        if chunk_idx not in relation_data:
+                            relation_data[chunk_idx] = []
+                        relation_data[chunk_idx].append((rel_text, embeddings[j]))
+
+            # 5. 批量添加文档到图谱
+            documents_to_add = []
+            for i, (entities, relations) in enumerate(batch_results):
                 if i in completed_chunks_set:
                     skipped_chunks += 1
                     total_entities += len(entities)
                     total_relations += len(relations)
-                    doc_info.entities_count = total_entities
                     continue
-                
-                total_entities += len(entities)
-                total_relations += len(relations)
 
-                # 实时更新实体数（让用户可以通过 /docs 查看进度）
-                doc_info.entities_count = total_entities
-
-                # 添加到图谱
                 chunk_doc_id = f"{doc_id}_{i}"
-                from skills.graphrag.services import Entity
-                entity_objects = [
-                    Entity(name=e.name, type=e.type, positions=[(e.start, e.end)])
-                    for e in entities
-                ]
+                entity_objs = [Entity(name=e.name, type=e.type, positions=[(e.start, e.end)]) for e in entities]
 
-                # 将实体和关系信息添加到metadata
                 metadata = {
                     "source": doc_info.file_path,
                     "chunk_index": i,
@@ -495,29 +530,85 @@ class DocumentManager:
                     "relations": ",".join([f"{r.source}-{r.relation}-{r.target}" for r in relations[:5]])
                 }
 
-                # 使用预生成的 embedding
-                embedding = chunk_embeddings.get(i)
-                
-                graph_service.add_document(
-                    text=chunks[i],
-                    doc_id=chunk_doc_id,
-                    metadata=metadata,
-                    entities=entity_objects,
-                    embedding=embedding
-                )
+                documents_to_add.append({
+                    "text": chunks[i],
+                    "doc_id": chunk_doc_id,
+                    "metadata": metadata,
+                    "entities": entity_objs,
+                    "entity_embeddings": entity_embeddings.get(i, []),
+                    "relation_texts": [r[0] for r in relation_data.get(i, [])],
+                    "relation_embeddings": [r[1] for r in relation_data.get(i, [])],
+                    "embedding": chunk_embeddings.get(i)
+                })
 
-                # 记录已完成的块（用于断点续传）
-                if i not in doc_info.completed_chunks:
-                    doc_info.completed_chunks.append(i)
+            # 批量处理
+            if documents_to_add:
+                batch_save_size = 10
+                for batch_start in range(0, len(documents_to_add), batch_save_size):
+                    batch_end = min(batch_start + batch_save_size, len(documents_to_add))
+                    batch_docs = documents_to_add[batch_start:batch_end]
 
-                # 每5块保存一次，并更新进度
-                if (i + 1) % 5 == 0 or i == total_chunks - 1:
+                    for doc in batch_docs:
+                        graph_service.collection.add(
+                            ids=[doc["doc_id"]],
+                            documents=[doc["text"]],
+                            metadatas=[doc["metadata"]],
+                            embeddings=[doc["embedding"]] if doc["embedding"] else None
+                        )
+
+                        if graph_service.triple_store and doc["embedding"]:
+                            from skills.graphrag.services.triple_vector_store import EntityInfo
+                            graph_service.triple_store.add_chunk(
+                                chunk_id=doc["doc_id"],
+                                text=doc["text"],
+                                embedding=doc["embedding"],
+                                metadata=doc["metadata"]
+                            )
+
+                        for entity, embedding in zip(doc["entities"], doc["entity_embeddings"]):
+                            graph_service._index_entity(entity, doc["doc_id"])
+                            entity_info = EntityInfo(
+                                name=entity.name,
+                                entity_type=entity.type,
+                                description=f"{entity.name} {entity.type}",
+                                source_ids=[doc["doc_id"]]
+                            )
+                            graph_service.triple_store.add_entity(entity_info, embedding)
+
+                        for rel_text, embedding in zip(doc["relation_texts"], doc["relation_embeddings"]):
+                            from skills.graphrag.services import Relation
+                            relation = Relation(
+                                source=doc["doc_id"],
+                                target="",
+                                relation="CO_OCCUR",
+                                confidence=0.5,
+                                doc_id=doc["doc_id"]
+                            )
+                            from skills.graphrag.services.triple_vector_store import RelationInfo
+                            relation_info = RelationInfo(
+                                source=relation.source,
+                                target=relation.target,
+                                relation=relation.relation,
+                                description=rel_text,
+                                confidence=relation.confidence,
+                                source_ids=[doc["doc_id"]]
+                            )
+                            graph_service.triple_store.add_relation(relation_info, embedding)
+                            graph_service.relations.append(relation)
+
+                        if doc["metadata"]["chunk_index"] not in doc_info.completed_chunks:
+                            doc_info.completed_chunks.append(doc["metadata"]["chunk_index"])
+
+                        total_entities += len(doc["entities"])
+                        total_relations += len(doc["relation_texts"])
+                        doc_info.entities_count = total_entities
+
+                    # 每批次保存一次
                     graph_service._save_index()
-                    # 更新进度：99% + (1% * 当前进度)
-                    save_progress = 0.99 + (0.01 * (i + 1) / total_chunks)
-                    progress_callback(save_progress, f"保存索引 {i+1}/{total_chunks} 块...")
+                    progress_callback(0.99 + 0.01 * (batch_end) / len(documents_to_add),
+                                    f"保存 {batch_end}/{len(documents_to_add)} 块...")
                     self._save_document_registry()
-            
+
             # 显示断点续传统计
             if skipped_chunks > 0:
                 logger.info(f"[{doc_info.name}] 断点续传: 跳过 {skipped_chunks}/{total_chunks} 个已完成的块")

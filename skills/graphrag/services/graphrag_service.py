@@ -375,6 +375,91 @@ class GraphRAGService:
 
         return doc_id
 
+    def add_documents_batch(
+        self,
+        documents: List[Dict],
+        progress_callback: Optional[Callable] = None
+    ) -> int:
+        """
+        批量添加文档（优化版，避免逐个调用 embedding API）
+
+        Args:
+            documents: 文档列表，每个文档包含:
+                - text: 文档文本
+                - doc_id: 文档ID
+                - metadata: 元数据
+                - entities: 实体列表
+                - embedding: 预生成的 embedding
+                - relation_texts: 预生成的关系描述列表
+            progress_callback: 进度回调
+
+        Returns:
+            成功添加的文档数
+        """
+        total = len(documents)
+        success_count = 0
+
+        for idx, doc in enumerate(documents):
+            try:
+                entities = doc.get("entities", [])
+                relation_texts = doc.get("relation_texts", [])
+
+                self.collection.add(
+                    ids=[doc["doc_id"]],
+                    documents=[doc["text"]],
+                    metadatas=[doc.get("metadata", {})],
+                    embeddings=[doc["embedding"]] if doc.get("embedding") else None
+                )
+
+                if self.triple_store and doc.get("embedding"):
+                    self.triple_store.add_chunk(
+                        chunk_id=doc["doc_id"],
+                        text=doc["text"],
+                        embedding=doc["embedding"],
+                        metadata=doc.get("metadata", {})
+                    )
+
+                for entity, embedding in zip(entities, doc.get("entity_embeddings", [])):
+                    self._index_entity(entity, doc["doc_id"])
+                    if self.triple_store:
+                        entity_text = f"{entity.name} {entity.type}"
+                        entity_info = EntityInfo(
+                            name=entity.name,
+                            entity_type=entity.type,
+                            description=entity_text,
+                            source_ids=[doc["doc_id"]]
+                        )
+                        self.triple_store.add_entity(entity_info, embedding)
+
+                for relation_text, embedding in zip(relation_texts, doc.get("relation_embeddings", [])):
+                    relation = Relation(
+                        source=doc["doc_id"],
+                        target="",
+                        relation="CO_OCCUR",
+                        confidence=0.5,
+                        doc_id=doc["doc_id"]
+                    )
+                    relation_info = RelationInfo(
+                        source=relation.source,
+                        target=relation.target,
+                        relation=relation.relation,
+                        description=relation_text,
+                        confidence=relation.confidence,
+                        source_ids=[doc["doc_id"]]
+                    )
+                    self.triple_store.add_relation(relation_info, embedding)
+                    self.relations.append(relation)
+
+                success_count += 1
+
+                if progress_callback and (idx + 1) % 10 == 0:
+                    progress_callback(idx + 1, total, f"保存 {idx + 1}/{total}")
+
+            except Exception as e:
+                print(f"      ❌ 保存文档 {doc.get('doc_id', 'unknown')} 失败: {e}")
+
+        return success_count
+
     def _index_entity(self, entity: Entity, doc_id: str):
         """索引实体"""
         if entity.name not in self.entity_index:
