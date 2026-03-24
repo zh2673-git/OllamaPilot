@@ -321,8 +321,15 @@ class OllamaPilotChat:
             traceback.print_exc()
             return False
     
-    def index_document(self, doc_path: str, doc_name: Optional[str] = None, async_mode: bool = True) -> bool:
-        """手动索引文档或文件夹"""
+    def index_document(self, doc_path: str, doc_name: Optional[str] = None, async_mode: bool = True, force: bool = False) -> bool:
+        """手动索引文档或文件夹
+        
+        Args:
+            doc_path: 文档路径
+            doc_name: 文档名称（可选）
+            async_mode: 是否异步索引
+            force: 是否强制重新索引（即使已完成也会重新索引）
+        """
         if not self.doc_manager:
             print("❌ 文档管理器未初始化（可能没有配置Embedding模型）")
             return False
@@ -331,7 +338,7 @@ class OllamaPilotChat:
 
         # 处理文件夹
         if path.is_dir():
-            return self._index_directory_async(doc_path) if async_mode else self._index_directory_sync(doc_path)
+            return self._index_directory_async(doc_path, force=force) if async_mode else self._index_directory_sync(doc_path, force=force)
         
         # 处理单个文件
         if not doc_name:
@@ -347,12 +354,12 @@ class OllamaPilotChat:
             
             if async_mode:
                 print(f"🔄 开始后台索引（您可以继续对话）...")
-                self.doc_manager.start_indexing(doc_id, silent=True)
+                self.doc_manager.start_indexing(doc_id, silent=True, force=force)
                 print(f"   使用 /docs 查看索引进度")
                 return True
             else:
                 print(f"🔄 开始索引（静默模式）...")
-                self.doc_manager.start_indexing(doc_id, silent=True)
+                self.doc_manager.start_indexing(doc_id, silent=True, force=force)
                 success = self.doc_manager.wait_for_indexing(doc_id, timeout=300)
                 
                 if success:
@@ -469,9 +476,16 @@ class OllamaPilotChat:
             print(f"\n✅ 数据迁移完成: {migrated_count}/{len(needs_migration)} 个文档")
         print()
 
-    def _index_directory_async(self, dir_path: str) -> bool:
-        """异步索引整个文件夹（不阻塞对话）"""
+    def _index_directory_async(self, dir_path: str, force: bool = False) -> bool:
+        """异步索引整个文件夹（不阻塞对话）
+        
+        Args:
+            dir_path: 文件夹路径
+            force: 是否强制重新索引
+        """
         print(f"\n📁 索引文件夹: {dir_path}")
+        if force:
+            print("  🔄 强制重新索引模式（将清除旧数据）")
         
         files = self._get_files_in_directory(dir_path)
         
@@ -516,7 +530,7 @@ class OllamaPilotChat:
             # 启动所有索引（不等待）
             for doc_id, file_name in doc_ids:
                 try:
-                    self.doc_manager.start_indexing(doc_id, silent=True)
+                    self.doc_manager.start_indexing(doc_id, silent=True, force=force)
                     print(f"  🔄 开始索引: {file_name}")
                 except Exception as e:
                     print(f"  ❌ [{file_name}] 启动失败: {e}")
@@ -530,9 +544,16 @@ class OllamaPilotChat:
 
         return True
     
-    def _index_directory_sync(self, dir_path: str) -> bool:
-        """同步索引整个文件夹（阻塞式）"""
+    def _index_directory_sync(self, dir_path: str, force: bool = False) -> bool:
+        """同步索引整个文件夹（阻塞式）
+        
+        Args:
+            dir_path: 文件夹路径
+            force: 是否强制重新索引
+        """
         print(f"\n📁 索引文件夹: {dir_path}")
+        if force:
+            print("  🔄 强制重新索引模式（将清除旧数据）")
         
         files = self._get_files_in_directory(dir_path)
         
@@ -562,7 +583,7 @@ class OllamaPilotChat:
                     auto_index=False
                 )
                 
-                self.doc_manager.start_indexing(doc_id, silent=True)
+                self.doc_manager.start_indexing(doc_id, silent=True, force=force)
                 success = self.doc_manager.wait_for_indexing(doc_id, timeout=300)
                 
                 if success:
@@ -1076,6 +1097,8 @@ class OllamaPilotChat:
 ├─────────────────────────────────────────────────────────────────────┤
 │  /docs                         列出所有文档                         │
 │  /index [path]                 索引文档/文件夹(默认:knowledge_base) │
+│  /index --force [path]         强制重新索引（清除旧数据）           │
+│  /index --migrate              迁移旧版数据到 LightRAG 格式         │
 │  /resume                       恢复失败的索引任务                   │
 ├─────────────────────────────────────────────────────────────────────┤
 │  图例: 💾 内存会话  📦 数据库恢复的会话                              │
@@ -1254,10 +1277,18 @@ class OllamaPilotChat:
             self.list_documents()
         
         elif cmd == '/index':
-            if arg1 and arg1 not in ['--migrate', '-m']:
-                self.index_document(arg1)
-            elif arg1 in ['--migrate', '-m']:
+            # 解析参数
+            force_mode = '--force' in args or '-f' in args
+            migrate_mode = '--migrate' in args or '-m' in args
+            
+            # 移除选项参数，获取实际路径参数
+            clean_args = [a for a in args if a not in ['--force', '-f', '--migrate', '-m']]
+            path_arg = clean_args[0] if clean_args else None
+            
+            if migrate_mode:
                 self._check_and_migrate_legacy_data()
+            elif path_arg:
+                self.index_document(path_arg, force=force_mode)
             else:
                 base_dir = Path(self.doc_manager.base_persist_dir) if self.doc_manager else None
                 if base_dir and base_dir.exists():
@@ -1283,7 +1314,7 @@ class OllamaPilotChat:
                     if files:
                         print(f"📁 使用默认知识库文件夹: {default_kb}")
                         print(f"   发现 {len(files)} 个文档")
-                        self.index_document(str(default_kb))
+                        self.index_document(str(default_kb), force=force_mode)
                     else:
                         print(f"⚠️ 默认知识库文件夹为空: {default_kb}")
                         print(f"   支持的格式: {', '.join(self.SUPPORTED_EXTENSIONS)}")
@@ -1291,7 +1322,7 @@ class OllamaPilotChat:
                         if choice == 'y':
                             folder = self._select_folder_interactive()
                             if folder:
-                                self.index_document(folder)
+                                self.index_document(folder, force=force_mode)
                 else:
                     print(f"⚠️ 默认知识库文件夹不存在: {default_kb}")
                     print("\n选项:")
@@ -1307,7 +1338,7 @@ class OllamaPilotChat:
                     elif choice == '2':
                         folder = self._select_folder_interactive()
                         if folder:
-                            self.index_document(folder)
+                            self.index_document(folder, force=force_mode)
         
         elif cmd == '/resume':
             self.resume_failed_indexing()

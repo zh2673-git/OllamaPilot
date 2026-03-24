@@ -189,7 +189,7 @@ class DocumentManager:
         
         return doc_id
     
-    def start_indexing(self, doc_id: str, silent: bool = True, resume: bool = True) -> bool:
+    def start_indexing(self, doc_id: str, silent: bool = True, resume: bool = True, force: bool = False) -> bool:
         """
         开始索引文档（后台静默处理）
         
@@ -197,6 +197,7 @@ class DocumentManager:
             doc_id: 文档ID
             silent: 是否静默模式（只显示50%和100%进度）
             resume: 是否支持断点续传（默认True）
+            force: 是否强制重新索引（即使已完成也会重新索引）
             
         Returns:
             是否成功启动
@@ -211,12 +212,22 @@ class DocumentManager:
             print(f"⏳ 文档正在索引中: {doc_info.name}")
             return False
         
-        if doc_info.status == IndexingStatus.COMPLETED:
+        if doc_info.status == IndexingStatus.COMPLETED and not force:
             print(f"✅ 文档已索引: {doc_info.name}")
             return False
         
+        # 强制重新索引时，清除之前的状态
+        if force and doc_info.status == IndexingStatus.COMPLETED:
+            print(f"🔄 强制重新索引: {doc_info.name}")
+            # 清除旧的存储数据
+            storage_path = self._get_document_storage_path(doc_info.name, doc_info.model_name)
+            if storage_path.exists():
+                import shutil
+                shutil.rmtree(storage_path)
+                print(f"   已清除旧索引数据")
+        
         # 检查是否支持断点续传
-        if resume and doc_info.status == IndexingStatus.FAILED:
+        if resume and doc_info.status == IndexingStatus.FAILED and not force:
             print(f"🔄 检测到上次索引失败，尝试断点续传: {doc_info.name}")
             doc_info.status = IndexingStatus.PENDING
             doc_info.progress = 0.0
