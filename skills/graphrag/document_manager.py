@@ -235,11 +235,12 @@ class DocumentManager:
             doc_info.completed_chunks = []
             print(f"   已清除断点续传记录")
         
-        # 检查是否支持断点续传
-        if resume and doc_info.status == IndexingStatus.FAILED and not force:
+        # 检查是否支持断点续传（支持 FAILED 和 RUNNING 状态）
+        if resume and not force and doc_info.status in [IndexingStatus.FAILED, IndexingStatus.RUNNING]:
             completed_count = len(doc_info.completed_chunks) if doc_info.completed_chunks else 0
             if completed_count > 0:
-                print(f"🔄 检测到上次索引失败，尝试断点续传: {doc_info.name}")
+                status_text = "中断" if doc_info.status == IndexingStatus.RUNNING else "失败"
+                print(f"🔄 检测到上次索引{status_text}，尝试断点续传: {doc_info.name}")
                 print(f"   已记录 {completed_count} 个已完成的块")
                 doc_info.status = IndexingStatus.PENDING
                 # 根据已完成的块计算进度
@@ -249,7 +250,8 @@ class DocumentManager:
                     doc_info.progress = 0.0
                 doc_info.message = f"准备断点续传（{completed_count}块已完成）..."
             else:
-                print(f"🔄 检测到上次索引失败，重新开始: {doc_info.name}")
+                status_text = "中断" if doc_info.status == IndexingStatus.RUNNING else "失败"
+                print(f"🔄 检测到上次索引{status_text}，重新开始: {doc_info.name}")
                 doc_info.status = IndexingStatus.PENDING
                 doc_info.progress = 0.0
                 doc_info.message = "准备重新索引..."
@@ -645,21 +647,31 @@ class DocumentManager:
     
     def resume_failed_indexing(self) -> List[str]:
         """
-        恢复所有失败的索引任务
+        恢复所有失败或中断的索引任务
         
         Returns:
             恢复的文档ID列表
         """
         failed_docs = [
             doc_id for doc_id, doc_info in self.documents.items()
-            if doc_info.status == IndexingStatus.FAILED
+            if doc_info.status in [IndexingStatus.FAILED, IndexingStatus.RUNNING]
         ]
         
         if not failed_docs:
-            print("✅ 没有需要恢复的失败任务")
+            print("✅ 没有需要恢复的失败或中断任务")
             return []
         
-        print(f"🔄 发现 {len(failed_docs)} 个失败的索引任务，开始恢复...")
+        # 分类统计
+        failed_count = sum(1 for doc_id in failed_docs if self.documents[doc_id].status == IndexingStatus.FAILED)
+        running_count = len(failed_docs) - failed_count
+        
+        status_msg = []
+        if failed_count > 0:
+            status_msg.append(f"{failed_count}个失败")
+        if running_count > 0:
+            status_msg.append(f"{running_count}个中断")
+        
+        print(f"🔄 发现 {len(failed_docs)} 个需要恢复的任务（{'，'.join(status_msg)}），开始恢复...")
         
         resumed = []
         for doc_id in failed_docs:
