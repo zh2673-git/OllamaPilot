@@ -40,6 +40,12 @@ class DocumentInfo:
     created_at: float = 0.0
     started_at: Optional[float] = None  # 索引开始时间
     completed_at: Optional[float] = None
+    completed_chunks: List[int] = None  # 已完成的块索引列表（用于断点续传）
+    
+    def __post_init__(self):
+        """初始化后处理"""
+        if self.completed_chunks is None:
+            self.completed_chunks = []
 
 
 class DocumentManager:
@@ -225,13 +231,28 @@ class DocumentManager:
                 import shutil
                 shutil.rmtree(storage_path)
                 print(f"   已清除旧索引数据")
+            # 清空已完成的块记录
+            doc_info.completed_chunks = []
+            print(f"   已清除断点续传记录")
         
         # 检查是否支持断点续传
         if resume and doc_info.status == IndexingStatus.FAILED and not force:
-            print(f"🔄 检测到上次索引失败，尝试断点续传: {doc_info.name}")
-            doc_info.status = IndexingStatus.PENDING
-            doc_info.progress = 0.0
-            doc_info.message = "准备断点续传..."
+            completed_count = len(doc_info.completed_chunks) if doc_info.completed_chunks else 0
+            if completed_count > 0:
+                print(f"🔄 检测到上次索引失败，尝试断点续传: {doc_info.name}")
+                print(f"   已记录 {completed_count} 个已完成的块")
+                doc_info.status = IndexingStatus.PENDING
+                # 根据已完成的块计算进度
+                if doc_info.chunks_count > 0:
+                    doc_info.progress = completed_count / doc_info.chunks_count * 0.95  # 95% 是块处理进度
+                else:
+                    doc_info.progress = 0.0
+                doc_info.message = f"准备断点续传（{completed_count}块已完成）..."
+            else:
+                print(f"🔄 检测到上次索引失败，重新开始: {doc_info.name}")
+                doc_info.status = IndexingStatus.PENDING
+                doc_info.progress = 0.0
+                doc_info.message = "准备重新索引..."
             self._save_document_registry()
         
         # 启动后台线程
@@ -283,6 +304,8 @@ class DocumentManager:
             doc_info.progress = 1.0
             doc_info.completed_at = time.time()
             doc_info.message = "索引完成"
+            # 清空已完成的块记录（索引已完成，无需断点续传）
+            doc_info.completed_chunks = []
             
             if silent:
                 print(f"✅ {doc_info.name}: 索引完成")
@@ -397,7 +420,18 @@ class DocumentManager:
 
             # 处理批量结果
             total_chunks = len(chunks)
+            completed_chunks_set = set(doc_info.completed_chunks) if doc_info.completed_chunks else set()
+            skipped_chunks = 0
+            
             for i, (entities, relations) in enumerate(batch_results):
+                # 断点续传：跳过已完成的块
+                if i in completed_chunks_set:
+                    skipped_chunks += 1
+                    total_entities += len(entities)
+                    total_relations += len(relations)
+                    doc_info.entities_count = total_entities
+                    continue
+                
                 total_entities += len(entities)
                 total_relations += len(relations)
 
@@ -428,6 +462,10 @@ class DocumentManager:
                     entities=entity_objects
                 )
 
+                # 记录已完成的块（用于断点续传）
+                if i not in doc_info.completed_chunks:
+                    doc_info.completed_chunks.append(i)
+
                 # 每5块保存一次，并更新进度（最后5%用于实体/关系向量化）
                 if (i + 1) % 5 == 0 or i == total_chunks - 1:
                     graph_service._save_index()
@@ -435,6 +473,10 @@ class DocumentManager:
                     save_progress = 0.95 + (0.05 * (i + 1) / total_chunks)
                     progress_callback(save_progress, f"保存索引 {i+1}/{total_chunks} 块...")
                     self._save_document_registry()
+            
+            # 显示断点续传统计
+            if skipped_chunks > 0:
+                logger.info(f"[{doc_info.name}] 断点续传: 跳过 {skipped_chunks}/{total_chunks} 个已完成的块")
 
             doc_info.entities_count = total_entities
             progress_callback(1.0, f"索引完成（{total_entities}实体，{total_relations}关系）")
@@ -506,7 +548,8 @@ class DocumentManager:
                         message=doc_data.get("message", ""),
                         created_at=doc_data.get("created_at", 0.0),
                         started_at=doc_data.get("started_at"),
-                        completed_at=doc_data.get("completed_at")
+                        completed_at=doc_data.get("completed_at"),
+                        completed_chunks=doc_data.get("completed_chunks", [])
                     )
             except Exception as e:
                 print(f"⚠️ 加载文档注册表失败: {e}")
@@ -531,7 +574,8 @@ class DocumentManager:
                 "message": doc_info.message,
                 "created_at": doc_info.created_at,
                 "started_at": doc_info.started_at,
-                "completed_at": doc_info.completed_at
+                "completed_at": doc_info.completed_at,
+                "completed_chunks": doc_info.completed_chunks if doc_info.completed_chunks else []
             }
         
         with open(registry_path, 'w', encoding='utf-8') as f:
