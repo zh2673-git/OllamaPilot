@@ -379,9 +379,9 @@ class TripleVectorStore:
                     migrated_count += 1
                     success = True
 
-                    # 每5个实体后添加小延迟，减轻Ollama压力
-                    if i % 5 == 0:
-                        time.sleep(0.2)
+                    # 每10个实体后添加小延迟
+                    if i % 10 == 0:
+                        time.sleep(0.05)
 
                     if migrated_count % 20 == 0:
                         self._save_migration_progress(doc_id, {
@@ -396,19 +396,15 @@ class TripleVectorStore:
                     if retry_count < max_retries:
                         # 根据错误类型调整延迟
                         if "404" in error_msg or "Connection" in error_msg:
-                            delay = 3  # 连接错误等待更长时间
+                            delay = 1  # 连接错误等待
                             print(f"  ⏳ 连接问题，等待 {delay} 秒后重试 ({retry_count}/{max_retries}): {entity_name}")
                         else:
-                            delay = 2
+                            delay = 0.5
                             print(f"  ⏳ 重试 ({retry_count}/{max_retries}): {entity_name} - {error_msg[:50]}")
                         time.sleep(delay)
                     else:
                         failed_count += 1
                         print(f"  ❌ 实体 '{entity_name}' 迁移失败 ({failed_count}): {error_msg}")
-                        # 每失败10个实体后暂停一下，给Ollama恢复时间
-                        if failed_count % 10 == 0:
-                            print(f"  ⏸️  已失败 {failed_count} 个实体，暂停 5 秒让 Ollama 恢复...")
-                            time.sleep(5)
 
         progress["migrated_entities"] = list(migrated_entities_set)
         self._save_migration_progress(doc_id, progress)
@@ -466,9 +462,9 @@ class TripleVectorStore:
                     relation_count += 1
                     success = True
 
-                    # 每5个关系后添加小延迟
-                    if i % 5 == 0:
-                        time.sleep(0.2)
+                    # 每10个关系后添加小延迟
+                    if i % 10 == 0:
+                        time.sleep(0.05)
 
                     if relation_count % 20 == 0:
                         progress["migrated_relations"] = list(migrated_relations_set)
@@ -480,18 +476,15 @@ class TripleVectorStore:
                     error_msg = str(e)
                     if retry_count < max_retries:
                         if "404" in error_msg or "Connection" in error_msg:
-                            delay = 3
+                            delay = 1
                             print(f"  ⏳ 连接问题，等待 {delay} 秒后重试关系 ({retry_count}/{max_retries})")
                         else:
-                            delay = 2
+                            delay = 0.5
                             print(f"  ⏳ 重试关系 ({retry_count}/{max_retries}): {error_msg[:50]}")
                         time.sleep(delay)
                     else:
                         failed_relations += 1
                         print(f"  ❌ 关系迁移失败 ({failed_relations}): {error_msg}")
-                        if failed_relations % 10 == 0:
-                            print(f"  ⏸️  已失败 {failed_relations} 个关系，暂停 5 秒...")
-                            time.sleep(5)
 
         progress["migrated_relations"] = list(migrated_relations_set)
         self._save_migration_progress(doc_id, progress)
