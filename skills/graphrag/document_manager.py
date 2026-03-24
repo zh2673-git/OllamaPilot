@@ -396,6 +396,7 @@ class DocumentManager:
             )
 
             # 处理批量结果
+            total_chunks = len(chunks)
             for i, (entities, relations) in enumerate(batch_results):
                 total_entities += len(entities)
                 total_relations += len(relations)
@@ -415,7 +416,7 @@ class DocumentManager:
                 metadata = {
                     "source": doc_info.file_path,
                     "chunk_index": i,
-                    "total_chunks": len(chunks),
+                    "total_chunks": total_chunks,
                     "entities": ",".join([e.name for e in entities[:10]]),
                     "relations": ",".join([f"{r.source}-{r.relation}-{r.target}" for r in relations[:5]])
                 }
@@ -427,9 +428,13 @@ class DocumentManager:
                     entities=entity_objects
                 )
 
-                # 每5块保存一次
-                if (i + 1) % 5 == 0:
+                # 每5块保存一次，并更新进度（最后5%用于实体/关系向量化）
+                if (i + 1) % 5 == 0 or i == total_chunks - 1:
                     graph_service._save_index()
+                    # 更新进度：95% + (5% * 当前进度)
+                    save_progress = 0.95 + (0.05 * (i + 1) / total_chunks)
+                    progress_callback(save_progress, f"保存索引 {i+1}/{total_chunks} 块...")
+                    self._save_document_registry()
 
             doc_info.entities_count = total_entities
             progress_callback(1.0, f"索引完成（{total_entities}实体，{total_relations}关系）")
