@@ -245,9 +245,11 @@ class DocumentManager:
                 doc_info.status = IndexingStatus.PENDING
                 # 根据已完成的块计算进度
                 if doc_info.chunks_count > 0:
-                    doc_info.progress = completed_count / doc_info.chunks_count * 0.95  # 95% 是块处理进度
+                    resume_progress = completed_count / doc_info.chunks_count * 0.95  # 95% 是块处理进度
                 else:
-                    doc_info.progress = 0.0
+                    resume_progress = 0.0
+                # 保存进度到临时属性，启动线程时会使用
+                doc_info._resume_progress = resume_progress
                 doc_info.message = f"准备断点续传（{completed_count}块已完成）..."
             else:
                 status_text = "中断" if doc_info.status == IndexingStatus.RUNNING else "失败"
@@ -259,7 +261,12 @@ class DocumentManager:
         
         # 启动后台线程
         doc_info.status = IndexingStatus.RUNNING
-        doc_info.progress = 0.0
+        # 如果是断点续传，保留已计算的进度；否则从0开始
+        if not hasattr(doc_info, '_resume_progress'):
+            doc_info.progress = 0.0
+        else:
+            doc_info.progress = doc_info._resume_progress
+            delattr(doc_info, '_resume_progress')
         doc_info.message = "开始索引..."
         doc_info.started_at = time.time()  # 记录开始时间
         
