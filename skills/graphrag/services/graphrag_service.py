@@ -290,7 +290,8 @@ class GraphRAGService:
         text: str,
         doc_id: Optional[str] = None,
         metadata: Optional[Dict] = None,
-        entities: Optional[List[Entity]] = None
+        entities: Optional[List[Entity]] = None,
+        embedding: Optional[List[float]] = None
     ) -> str:
         """
         添加文档到图谱
@@ -300,6 +301,7 @@ class GraphRAGService:
             doc_id: 文档ID（可选，自动生成）
             metadata: 元数据
             entities: 预抽取的实体列表
+            embedding: 预生成的embedding向量（可选，如不提供则自动生成）
 
         Returns:
             文档ID
@@ -318,17 +320,18 @@ class GraphRAGService:
                 {"name": e.name, "type": e.type} for e in entities
             ])
 
-        # 2. 生成 embedding
+        # 2. 生成 embedding（如果未提供）
         start_time = time.time()
-        try:
-            if self._embedding_fn:
-                embeddings = self._embedding_fn([text])
-                embedding = embeddings[0] if embeddings else None
-            else:
+        if embedding is None:
+            try:
+                if self._embedding_fn:
+                    embeddings = self._embedding_fn([text])
+                    embedding = embeddings[0] if embeddings else None
+                else:
+                    embedding = None
+            except Exception as e:
+                print(f"      ⚠️ Embedding 生成失败: {e}")
                 embedding = None
-        except Exception as e:
-            print(f"      ⚠️ Embedding 生成失败: {e}")
-            embedding = None
 
         embed_time = time.time() - start_time
 

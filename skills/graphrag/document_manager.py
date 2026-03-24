@@ -423,6 +423,40 @@ class DocumentManager:
             completed_chunks_set = set(doc_info.completed_chunks) if doc_info.completed_chunks else set()
             skipped_chunks = 0
             
+            # 预生成所有块的 embedding（批量处理，避免逐个调用API）
+            chunk_embeddings = {}
+            chunks_to_embed = []
+            chunk_indices_to_embed = []
+            
+            for i, _ in enumerate(batch_results):
+                if i not in completed_chunks_set:
+                    chunks_to_embed.append(chunks[i])
+                    chunk_indices_to_embed.append(i)
+            
+            if chunks_to_embed and graph_service._embedding_fn:
+                logger.info(f"[{doc_info.name}] 批量生成 {len(chunks_to_embed)} 个块的 embedding...")
+                progress_callback(0.95, f"生成 {len(chunks_to_embed)} 个块的向量...")
+                try:
+                    # 批量生成 embedding（每次最多50个，避免请求过大）
+                    batch_embed_size = 50
+                    for batch_start in range(0, len(chunks_to_embed), batch_embed_size):
+                        batch_end = min(batch_start + batch_embed_size, len(chunks_to_embed))
+                        batch_chunks = chunks_to_embed[batch_start:batch_end]
+                        batch_indices = chunk_indices_to_embed[batch_start:batch_end]
+                        
+                        embeddings = graph_service._embedding_fn(batch_chunks)
+                        for idx, embedding in zip(batch_indices, embeddings):
+                            chunk_embeddings[idx] = embedding
+                        
+                        # 更新进度
+                        embed_progress = 0.95 + (0.04 * batch_end / len(chunks_to_embed))
+                        progress_callback(embed_progress, f"生成向量 {batch_end}/{len(chunks_to_embed)}...")
+                        
+                    logger.info(f"[{doc_info.name}] 完成 embedding 生成")
+                except Exception as e:
+                    logger.warning(f"[{doc_info.name}] Embedding 批量生成失败: {e}，将逐个生成")
+                    chunk_embeddings = {}
+            
             for i, (entities, relations) in enumerate(batch_results):
                 # 断点续传：跳过已完成的块
                 if i in completed_chunks_set:
@@ -455,22 +489,26 @@ class DocumentManager:
                     "relations": ",".join([f"{r.source}-{r.relation}-{r.target}" for r in relations[:5]])
                 }
 
+                # 使用预生成的 embedding
+                embedding = chunk_embeddings.get(i)
+                
                 graph_service.add_document(
                     text=chunks[i],
                     doc_id=chunk_doc_id,
                     metadata=metadata,
-                    entities=entity_objects
+                    entities=entity_objects,
+                    embedding=embedding
                 )
 
                 # 记录已完成的块（用于断点续传）
                 if i not in doc_info.completed_chunks:
                     doc_info.completed_chunks.append(i)
 
-                # 每5块保存一次，并更新进度（最后5%用于实体/关系向量化）
+                # 每5块保存一次，并更新进度
                 if (i + 1) % 5 == 0 or i == total_chunks - 1:
                     graph_service._save_index()
-                    # 更新进度：95% + (5% * 当前进度)
-                    save_progress = 0.95 + (0.05 * (i + 1) / total_chunks)
+                    # 更新进度：99% + (1% * 当前进度)
+                    save_progress = 0.99 + (0.01 * (i + 1) / total_chunks)
                     progress_callback(save_progress, f"保存索引 {i+1}/{total_chunks} 块...")
                     self._save_document_registry()
             
