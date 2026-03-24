@@ -106,25 +106,38 @@ class SafeEmbeddingFunction:
     安全的 Embedding 函数包装器
 
     捕获所有异常，避免程序崩溃。
-    但在迁移模式下，需要抛出异常以便重试。
+    支持重试机制，确保 embedding 成功。
     """
 
-    def __init__(self, embedding_fn, raise_on_error: bool = False):
+    def __init__(self, embedding_fn, raise_on_error: bool = False, max_retries: int = 3):
         self.embedding_fn = embedding_fn
         self.fallback_used = False
         self.raise_on_error = raise_on_error
+        self.max_retries = max_retries
 
     def __call__(self, input: List[str]) -> List[List[float]]:
-        """安全调用 embedding 函数"""
-        try:
-            return self.embedding_fn(input)
-        except Exception as e:
-            if self.raise_on_error:
-                # 迁移模式下抛出异常，让上层处理重试
-                raise
-            # 正常模式下打印错误并返回零向量
-            print(f"      ⚠️ Embedding 调用失败: {e}")
-            # 返回零向量作为 fallback
-            # 假设 embedding 维度为 4096 (qwen3-embedding:8b)
-            dim = 4096 if "8b" in str(self.embedding_fn.model_name) else 3584
-            return [[0.0] * dim for _ in input]
+        """安全调用 embedding 函数（带重试）"""
+        last_error = None
+        
+        for attempt in range(self.max_retries):
+            try:
+                return self.embedding_fn(input)
+            except Exception as e:
+                last_error = e
+                if self.raise_on_error:
+                    # 迁移模式下直接抛出，让上层处理
+                    raise
+                
+                # 普通模式下重试
+                if attempt < self.max_retries - 1:
+                    wait_time = 0.5 * (attempt + 1)  # 递增延迟：0.5s, 1s, 1.5s
+                    print(f"      ⚠️ Embedding 失败 (尝试 {attempt + 1}/{self.max_retries}): {e}")
+                    print(f"         等待 {wait_time}s 后重试...")
+                    time.sleep(wait_time)
+                else:
+                    # 所有重试都失败
+                    print(f"      ❌ Embedding 最终失败: {e}")
+                    raise  # 抛出异常让上层处理
+        
+        # 不应该执行到这里
+        raise last_error if last_error else Exception("Embedding 调用失败")
