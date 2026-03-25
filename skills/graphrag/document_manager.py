@@ -13,6 +13,7 @@ from pathlib import Path
 import os
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from enum import Enum
 from skills.graphrag.services.graphrag_service import Entity
@@ -558,9 +559,6 @@ class DocumentManager:
             if entity_texts and graph_service._embedding_fn:
                 logger.info(f"[{doc_info.name}] 批量生成 {len(entity_texts)} 个实体的 embedding...")
 
-                # 多线程并行处理（Ollama API 逐个处理，用多线程并行多个请求）
-                from concurrent.futures import ThreadPoolExecutor, as_completed
-
                 # 动态并行数：根据 Ollama 能力和实测动态调整
                 initial_workers = 50  # Ollama 一般支持 50-100 并发，起始值设高减少调整时间
                 max_workers = 200     # 最大并行数
@@ -668,8 +666,6 @@ class DocumentManager:
             print(f"[DEBUG] 开始生成 relation embeddings，relation_texts 数量: {len(relation_texts) if relation_texts else 0}")
             if relation_texts and graph_service._embedding_fn:
                 logger.info(f"[{doc_info.name}] 批量生成 {len(relation_texts)} 个关系的 embedding...")
-
-                from concurrent.futures import ThreadPoolExecutor, as_completed
 
                 # 动态并行（复用 entity 的配置）
                 current_workers = 50
