@@ -560,7 +560,6 @@ class DocumentManager:
 
                 # 多线程并行处理（Ollama API 逐个处理，用多线程并行多个请求）
                 from concurrent.futures import ThreadPoolExecutor, as_completed
-                import time
 
                 # 动态并行数：根据 Ollama 能力和实测动态调整
                 initial_workers = 50  # Ollama 一般支持 50-100 并发，起始值设高减少调整时间
@@ -671,7 +670,6 @@ class DocumentManager:
                 logger.info(f"[{doc_info.name}] 批量生成 {len(relation_texts)} 个关系的 embedding...")
 
                 from concurrent.futures import ThreadPoolExecutor, as_completed
-                import time
 
                 # 动态并行（复用 entity 的配置）
                 current_workers = 50
