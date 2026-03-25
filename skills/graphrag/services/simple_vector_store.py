@@ -54,6 +54,17 @@ class SimpleVectorStore:
         # 加载已有数据
         self._load_vectors()
 
+        # 批量模式：禁用自动保存以提升性能
+        self._auto_persist = True
+
+    def set_auto_persist(self, enabled: bool):
+        """设置是否自动持久化向量"""
+        self._auto_persist = enabled
+
+    def persist(self):
+        """手动持久化向量到文件"""
+        self._save_vectors()
+
     def _init_db(self):
         """初始化数据库（按集合创建表）"""
         with sqlite3.connect(self.db_path) as conn:
@@ -137,8 +148,9 @@ class SimpleVectorStore:
 
             conn.commit()
 
-        # 保存向量
-        self._save_vectors()
+        # 保存向量（仅在自动保存开启时）
+        if self._auto_persist:
+            self._save_vectors()
 
     def get(self, ids: List[str], include: Optional[List[str]] = None) -> Dict:
         """

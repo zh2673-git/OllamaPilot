@@ -79,6 +79,23 @@ class TripleVectorStore:
         self._entity_descriptions: Dict[str, str] = {}
         self._load_entity_descriptions()
 
+        # 批量模式：禁用自动保存以提升性能
+        self._auto_save_enabled = True
+
+    def set_auto_save(self, enabled: bool):
+        """设置是否自动保存"""
+        self._auto_save_enabled = enabled
+        self.entity_store.set_auto_persist(enabled)
+        self.relation_store.set_auto_persist(enabled)
+        self.chunk_store.set_auto_persist(enabled)
+
+    def flush(self):
+        """手动保存所有缓存数据"""
+        self._save_entity_descriptions()
+        self.chunk_store.persist()
+        self.entity_store.persist()
+        self.relation_store.persist()
+
     def _load_entity_descriptions(self):
         """加载实体描述缓存"""
         desc_path = self.persist_dir / f"entity_descriptions_{self.collection_name}.json"
@@ -149,8 +166,9 @@ class TripleVectorStore:
             }]
         )
 
-        # 保存描述缓存
-        self._save_entity_descriptions()
+        # 保存描述缓存（仅在自动保存开启时）
+        if self._auto_save_enabled:
+            self._save_entity_descriptions()
 
     def add_relation(self, relation: RelationInfo, embedding: List[float]):
         """

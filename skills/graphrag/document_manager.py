@@ -15,6 +15,7 @@ import time
 import threading
 from dataclasses import dataclass
 from enum import Enum
+from skills.graphrag.services.graphrag_service import Entity
 
 
 class IndexingStatus(Enum):
@@ -444,31 +445,99 @@ class DocumentManager:
                     chunks_to_embed.append(chunks[i])
                     chunk_indices_to_embed.append(i)
 
-            # 1. 批量生成 chunk embedding
+            # 1. 批量生成 chunk embedding（多线程并行）
             if chunks_to_embed and graph_service._embedding_fn:
                 logger.info(f"[{doc_info.name}] 批量生成 {len(chunks_to_embed)} 个块的 embedding...")
                 progress_callback(0.95, f"生成 {len(chunks_to_embed)} 个块的向量...")
-                batch_embed_size = 50
+
+                # 动态并行处理
+                current_workers = 50
+                max_workers = 200
+                current_batch_size = 10
+                max_batch_size = 50
                 embedded_count = 0
-                for batch_start in range(0, len(chunks_to_embed), batch_embed_size):
-                    batch_end = min(batch_start + batch_embed_size, len(chunks_to_embed))
-                    batch_chunks = chunks_to_embed[batch_start:batch_end]
-                    batch_indices = chunk_indices_to_embed[batch_start:batch_end]
+                lock = threading.Lock()
+                speed_history = []
+                start_time = time.time()
+                last_speed_check = start_time
+                last_completed = 0
 
-                    embeddings = graph_service._embedding_fn(batch_chunks)
-                    for idx, embedding in zip(batch_indices, embeddings):
-                        chunk_embeddings[idx] = embedding
-                        embedded_count += 1
+                def process_chunk_batch(batch_data):
+                    """处理一批 chunk 的 embedding"""
+                    indices, texts = batch_data
+                    embeddings = graph_service._embedding_fn(texts)
+                    return list(zip(indices, embeddings))
 
-                    embed_progress = 0.95 + (0.04 * embedded_count / len(chunks_to_embed))
-                    progress_callback(embed_progress, f"生成向量 {embedded_count}/{len(chunks_to_embed)}...")
-                    logger.info(f"[{doc_info.name}] Embedding进度: {embedded_count}/{len(chunks_to_embed)}")
+                # 准备数据：分成小批次
+                all_chunk_batches = []
+                for i in range(0, len(chunks_to_embed), current_batch_size):
+                    batch_indices = chunk_indices_to_embed[i:i + current_batch_size]
+                    batch_texts = chunks_to_embed[i:i + current_batch_size]
+                    all_chunk_batches.append((batch_indices, batch_texts))
 
-                logger.info(f"[{doc_info.name}] 完成 chunk embedding 生成，共 {embedded_count} 个")
+                total_batches = len(all_chunk_batches)
+                batch_idx = 0
+                completed_batches = 0
+                failed_batches = 0
+
+                print(f"[DEBUG] 开始并行处理 {total_batches} 批 chunk (并行 {current_workers}, 每批 {current_batch_size})")
+
+                while batch_idx < len(all_chunk_batches):
+                    # 动态调整
+                    if completed_batches > 0 and completed_batches % 20 == 0:
+                        now = time.time()
+                        recent_time = now - last_speed_check
+                        recent_completed = completed_batches - last_completed
+                        if recent_time > 0:
+                            recent_speed = recent_completed / recent_time
+                            speed_history.append(recent_speed)
+                            if len(speed_history) > 10:
+                                speed_history.pop(0)
+                            avg_speed = sum(speed_history) / len(speed_history)
+
+                            if avg_speed < 3.0 and current_workers < max_workers:
+                                current_workers = min(current_workers + 30, max_workers)
+                                print(f"[DEBUG] Chunk 速度过慢({avg_speed:.2f} 批/秒)，增加并行数到 {current_workers}")
+
+                            last_speed_check = now
+                            last_completed = completed_batches
+
+                    # 并行处理
+                    remaining_batches = all_chunk_batches[batch_idx:]
+                    batches_this_round = min(current_workers, len(remaining_batches))
+
+                    with ThreadPoolExecutor(max_workers=current_workers) as executor:
+                        futures = []
+                        for i in range(batches_this_round):
+                            if batch_idx + i < len(all_chunk_batches):
+                                futures.append(executor.submit(process_chunk_batch, all_chunk_batches[batch_idx + i]))
+
+                        for future in futures:
+                            try:
+                                results = future.result()
+                                with lock:
+                                    for idx, embedding in results:
+                                        chunk_embeddings[idx] = embedding
+                                        embedded_count += 1
+                                    completed_batches += 1
+
+                                    if completed_batches % 20 == 0:
+                                        embed_progress = 0.95 + (0.04 * embedded_count / len(chunks_to_embed))
+                                        progress_callback(embed_progress, f"生成向量 {embedded_count}/{len(chunks_to_embed)}...")
+
+                            except Exception as e:
+                                with lock:
+                                    failed_batches += 1
+
+                    batch_idx += batches_this_round
+
+                logger.info(f"[{doc_info.name}] 完成 chunk embedding 生成，共 {embedded_count} 个 (失败: {failed_batches})")
 
             # 2. 准备实体和关系数据，并批量生成 embedding
             entity_texts = []  # (chunk_idx, entity_idx, entity_text)
             relation_texts = []  # (chunk_idx, relation_idx, relation_text)
+
+            print(f"[DEBUG] 开始收集 entity_texts 和 relation_texts，batch_results 长度: {len(batch_results)}")
 
             for i, (entities, relations) in enumerate(batch_results):
                 if i in completed_chunks_set:
@@ -482,42 +551,246 @@ class DocumentManager:
                     rel_text = f"{rel.source} 与 {rel.target} 相关"
                     relation_texts.append((i, len(relation_data.get(i, [])), rel_text))
 
-            # 3. 批量生成 entity embeddings
+            print(f"[DEBUG] 收集完成，entity_texts: {len(entity_texts)}, relation_texts: {len(relation_texts)}")
+
+            # 3. 批量生成 entity embeddings（使用多线程并行加速）
+            print(f"[DEBUG] 开始生成 entity embeddings，entity_texts 数量: {len(entity_texts) if entity_texts else 0}")
             if entity_texts and graph_service._embedding_fn:
                 logger.info(f"[{doc_info.name}] 批量生成 {len(entity_texts)} 个实体的 embedding...")
-                entity_batch_size = 100
-                for batch_start in range(0, len(entity_texts), entity_batch_size):
-                    batch_end = min(batch_start + entity_batch_size, len(entity_texts))
-                    batch_texts = [t[2] for t in entity_texts[batch_start:batch_end]]
 
-                    embeddings = graph_service._embedding_fn(batch_texts)
-                    for j, (chunk_idx, entity_idx, _) in enumerate(entity_texts[batch_start:batch_end]):
-                        if chunk_idx not in entity_embeddings:
-                            entity_embeddings[chunk_idx] = []
-                        entity_embeddings[chunk_idx].append(embeddings[j])
+                # 多线程并行处理（Ollama API 逐个处理，用多线程并行多个请求）
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                import threading
+                import time
 
-            # 4. 批量生成 relation embeddings
+                # 动态并行数：根据 Ollama 能力和实测动态调整
+                initial_workers = 50  # Ollama 一般支持 50-100 并发，起始值设高减少调整时间
+                max_workers = 200     # 最大并行数
+                min_workers = 20
+                current_workers = initial_workers
+                current_batch_size = 10
+                max_batch_size = 50  # 最大批次大小
+                entity_embed_count = 0
+                lock = threading.Lock()
+
+                def process_entity_batch(batch_data):
+                    results = []
+                    try:
+                        batch_texts = [t[2] for t in batch_data]
+                        embeddings = graph_service._embedding_fn(batch_texts)
+                        results = list(zip(batch_data, embeddings))
+                    except Exception as e:
+                        logger.error(f"实体批次处理失败: {e}")
+                    return results
+
+                # 初始分批
+                def split_batches(texts, batch_size):
+                    batches = []
+                    for i in range(0, len(texts), batch_size):
+                        batches.append(texts[i:i+batch_size])
+                    return batches
+
+                all_batches = split_batches(entity_texts, current_batch_size)
+                total_batches = len(all_batches)
+                batch_idx = 0
+                completed_batches = 0
+                failed_batches = 0
+                start_time = time.time()
+                last_speed_check = start_time
+                last_completed = 0
+                speed_history = []
+
+                print(f"[DEBUG] 开始动态并行处理 {total_batches} 批实体 (初始: 每批 {current_batch_size}, 并行 {current_workers})")
+
+                while batch_idx < len(all_batches):
+                    # 动态调整：根据速度调整并行数和批次大小
+                    if completed_batches > 0 and completed_batches % 20 == 0:
+                        now = time.time()
+                        recent_time = now - last_speed_check
+                        recent_completed = completed_batches - last_completed
+                        if recent_time > 0:
+                            recent_speed = recent_completed / recent_time
+                            speed_history.append(recent_speed)
+                            if len(speed_history) > 10:
+                                speed_history.pop(0)
+                            avg_speed = sum(speed_history) / len(speed_history)
+
+                            # 动态调整策略：如果速度 < 3 批/秒，就认为需要加速
+                            target_speed = 3.0  # 目标速度：每秒至少 3 批
+                            if avg_speed < target_speed:
+                                if current_workers < max_workers:
+                                    current_workers = min(current_workers + 30, max_workers)
+                                    print(f"[DEBUG] 速度过慢({avg_speed:.2f} 批/秒)，增加并行数到 {current_workers}")
+                                elif current_batch_size < max_batch_size:
+                                    current_batch_size = min(current_batch_size + 20, max_batch_size)
+                                    # 重新分批
+                                    all_batches = split_batches(entity_texts, current_batch_size)
+                                    total_batches = len(all_batches)
+                                    print(f"[DEBUG] 增加批次大小到 {current_batch_size}，重新分批为 {total_batches} 批")
+
+                            last_speed_check = now
+                            last_completed = completed_batches
+
+                    # 使用当前并行数创建线程池处理一批
+                    remaining_batches = all_batches[batch_idx:]
+                    batches_this_round = min(current_workers, len(remaining_batches))
+
+                    with ThreadPoolExecutor(max_workers=current_workers) as executor:
+                        futures = []
+                        for i in range(batches_this_round):
+                            if batch_idx + i < len(all_batches):
+                                futures.append((batch_idx + i, executor.submit(process_entity_batch, all_batches[batch_idx + i])))
+
+                        for idx, future in futures:
+                            results = future.result()
+                            with lock:
+                                if results:
+                                    for (chunk_idx, entity_idx, entity_text), embedding in results:
+                                        if chunk_idx not in entity_embeddings:
+                                            entity_embeddings[chunk_idx] = []
+                                        entity_embeddings[chunk_idx].append(embedding)
+                                        entity_embed_count += 1
+                                    completed_batches += 1
+                                else:
+                                    failed_batches += 1
+
+                    batch_idx += batches_this_round
+
+                    if completed_batches % 100 == 0:
+                        elapsed = time.time() - start_time
+                        rate = completed_batches / elapsed if elapsed > 0 else 0
+                        eta = (total_batches - completed_batches) / rate if rate > 0 else 0
+                        print(f"[DEBUG] 实体进度: {completed_batches}/{total_batches} 批, 速度: {rate:.2f} 批/秒, 剩余: {eta:.0f} 秒, 并行: {current_workers}, 批次: {current_batch_size}")
+
+                print(f"[DEBUG] 完成 entity embeddings 生成，共 {entity_embed_count} 个 (失败: {failed_batches})")
+            else:
+                print(f"[DEBUG] 跳过 entity embeddings（entity_texts 为空或无 embedding 函数）")
+
+            # 4. 批量生成 relation embeddings（同样使用多线程并行）
+            print(f"[DEBUG] 开始生成 relation embeddings，relation_texts 数量: {len(relation_texts) if relation_texts else 0}")
             if relation_texts and graph_service._embedding_fn:
                 logger.info(f"[{doc_info.name}] 批量生成 {len(relation_texts)} 个关系的 embedding...")
-                relation_batch_size = 100
-                for batch_start in range(0, len(relation_texts), relation_batch_size):
-                    batch_end = min(batch_start + relation_batch_size, len(relation_texts))
-                    batch_texts = [t[2] for t in relation_texts[batch_start:batch_end]]
 
-                    embeddings = graph_service._embedding_fn(batch_texts)
-                    for j, (chunk_idx, rel_idx, rel_text) in enumerate(relation_texts[batch_start:batch_end]):
-                        if chunk_idx not in relation_data:
-                            relation_data[chunk_idx] = []
-                        relation_data[chunk_idx].append((rel_text, embeddings[j]))
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                import threading
+                import time
+
+                # 动态并行（复用 entity 的配置）
+                current_workers = 50
+                max_workers = 200
+                current_batch_size = 10
+                max_batch_size = 50
+                rel_embed_count = 0
+                lock = threading.Lock()
+
+                def process_relation_batch(batch_data):
+                    results = []
+                    try:
+                        batch_texts = [t[2] for t in batch_data]
+                        embeddings = graph_service._embedding_fn(batch_texts)
+                        results = list(zip(batch_data, embeddings))
+                    except Exception as e:
+                        logger.error(f"关系批次处理失败: {e}")
+                    return results
+
+                def split_batches(texts, batch_size):
+                    batches = []
+                    for i in range(0, len(texts), batch_size):
+                        batches.append(texts[i:i+batch_size])
+                    return batches
+
+                all_batches = split_batches(relation_texts, current_batch_size)
+                total_batches = len(all_batches)
+                batch_idx = 0
+                completed_batches = 0
+                failed_batches = 0
+                start_time = time.time()
+                last_speed_check = start_time
+                last_completed = 0
+                speed_history = []
+
+                print(f"[DEBUG] 开始动态并行处理 {total_batches} 批关系 (初始: 每批 {current_batch_size}, 并行 {current_workers})")
+
+                while batch_idx < len(all_batches):
+                    if completed_batches > 0 and completed_batches % 20 == 0:
+                        now = time.time()
+                        recent_time = now - last_speed_check
+                        recent_completed = completed_batches - last_completed
+                        if recent_time > 0:
+                            recent_speed = recent_completed / recent_time
+                            speed_history.append(recent_speed)
+                            if len(speed_history) > 10:
+                                speed_history.pop(0)
+                            avg_speed = sum(speed_history) / len(speed_history)
+
+                            target_speed = 3.0
+                            if avg_speed < target_speed:
+                                if current_workers < max_workers:
+                                    current_workers = min(current_workers + 30, max_workers)
+                                    print(f"[DEBUG] 关系速度过慢({avg_speed:.2f} 批/秒)，增加并行数到 {current_workers}")
+                                elif current_batch_size < max_batch_size:
+                                    current_batch_size = min(current_batch_size + 20, max_batch_size)
+                                    all_batches = split_batches(relation_texts, current_batch_size)
+                                    total_batches = len(all_batches)
+                                    print(f"[DEBUG] 关系增加批次大小到 {current_batch_size}，重新分批为 {total_batches} 批")
+
+                            last_speed_check = now
+                            last_completed = completed_batches
+
+                    remaining_batches = all_batches[batch_idx:]
+                    batches_this_round = min(current_workers, len(remaining_batches))
+
+                    with ThreadPoolExecutor(max_workers=current_workers) as executor:
+                        futures = []
+                        for i in range(batches_this_round):
+                            if batch_idx + i < len(all_batches):
+                                futures.append((batch_idx + i, executor.submit(process_relation_batch, all_batches[batch_idx + i])))
+
+                        for idx, future in futures:
+                            results = future.result()
+                            with lock:
+                                if results:
+                                    for (chunk_idx, rel_idx, rel_text), embedding in results:
+                                        if chunk_idx not in relation_data:
+                                            relation_data[chunk_idx] = []
+                                        relation_data[chunk_idx].append((rel_text, embedding))
+                                        rel_embed_count += 1
+                                    completed_batches += 1
+                                else:
+                                    failed_batches += 1
+
+                    batch_idx += batches_this_round
+
+                    if completed_batches % 50 == 0:
+                        elapsed = time.time() - start_time
+                        rate = completed_batches / elapsed if elapsed > 0 else 0
+                        eta = (total_batches - completed_batches) / rate if rate > 0 else 0
+                        print(f"[DEBUG] 关系进度: {completed_batches}/{total_batches} 批, 速度: {rate:.2f} 批/秒, 剩余: {eta:.0f} 秒")
+
+                print(f"[DEBUG] 完成 relation embeddings 生成，共 {rel_embed_count} 个 (失败: {failed_batches})")
+            else:
+                print(f"[DEBUG] 跳过 relation embeddings（relation_texts 为空或无 embedding 函数）")
 
             # 5. 批量添加文档到图谱
             documents_to_add = []
+            print(f"[DEBUG] 开始构建 documents_to_add，batch_results 长度: {len(batch_results)}, completed_chunks_set: {completed_chunks_set}")
+            print(f"[DEBUG] chunk_embeddings 键数量: {len(chunk_embeddings)}")
+            print(f"[DEBUG] entity_embeddings 键数量: {len(entity_embeddings)}")
+            print(f"[DEBUG] relation_data 键数量: {len(relation_data)}")
+
             for i, (entities, relations) in enumerate(batch_results):
                 if i in completed_chunks_set:
                     skipped_chunks += 1
                     total_entities += len(entities)
                     total_relations += len(relations)
                     continue
+
+                # 检查实体和关系数据
+                has_entities = len(entities) > 0
+                has_embedding = i in chunk_embeddings and chunk_embeddings[i] is not None
+
+                if not has_embedding:
+                    logger.warning(f"[{doc_info.name}] 块 {i} 没有 embedding 或 embedding 为 None")
 
                 chunk_doc_id = f"{doc_id}_{i}"
                 entity_objs = [Entity(name=e.name, type=e.type, positions=[(e.start, e.end)]) for e in entities]
@@ -541,73 +814,140 @@ class DocumentManager:
                     "embedding": chunk_embeddings.get(i)
                 })
 
+            logger.info(f"[{doc_info.name}] documents_to_add 构建完成，长度: {len(documents_to_add)}")
+            print(f"[DEBUG] documents_to_add 构建完成，长度: {len(documents_to_add)}")
+
             # 批量处理
             if documents_to_add:
-                batch_save_size = 10
-                for batch_start in range(0, len(documents_to_add), batch_save_size):
-                    batch_end = min(batch_start + batch_save_size, len(documents_to_add))
-                    batch_docs = documents_to_add[batch_start:batch_end]
+                print(f"[DEBUG] 开始批量保存 {len(documents_to_add)} 个文档...")
+                logger.info(f"[{doc_info.name}] 开始批量保存 {len(documents_to_add)} 个文档...")
 
-                    for doc in batch_docs:
-                        graph_service.collection.add(
-                            ids=[doc["doc_id"]],
-                            documents=[doc["text"]],
-                            metadatas=[doc["metadata"]],
-                            embeddings=[doc["embedding"]] if doc["embedding"] else None
+                # 禁用自动保存以提升性能
+                if graph_service.triple_store:
+                    graph_service.triple_store.set_auto_save(False)
+
+                # 收集所有块、实体、关系数据
+                all_chunk_ids = []
+                all_chunk_texts = []
+                all_chunk_embeddings = []
+                all_chunk_metadatas = []
+
+                all_entity_ids = []
+                all_entity_texts = []
+                all_entity_embeddings = []
+                all_entity_metadatas = []
+
+                all_relation_ids = []
+                all_relation_texts = []
+                all_relation_embeddings = []
+                all_relation_metadatas = []
+
+                for doc in documents_to_add:
+                    if doc["embedding"] is None:
+                        continue
+
+                    # 收集块数据
+                    all_chunk_ids.append(doc["doc_id"])
+                    all_chunk_texts.append(doc["text"])
+                    all_chunk_embeddings.append(doc["embedding"])
+                    all_chunk_metadatas.append(doc["metadata"])
+
+                    # 收集实体数据
+                    for entity, embedding in zip(doc["entities"], doc["entity_embeddings"]):
+                        entity_id = f"{doc['doc_id']}_{entity.name}_{entity.type}"
+                        entity_text = f"{entity.name} {entity.type}"
+                        all_entity_ids.append(entity_id)
+                        all_entity_texts.append(entity_text)
+                        all_entity_embeddings.append(embedding)
+                        all_entity_metadatas.append({
+                            "name": entity.name,
+                            "type": entity.type,
+                            "doc_id": doc["doc_id"]
+                        })
+                        graph_service._index_entity(entity, doc["doc_id"])
+
+                    # 收集关系数据
+                    for rel_text, embedding in zip(doc["relation_texts"], doc["relation_embeddings"]):
+                        rel_id = f"{doc['doc_id']}_{rel_text[:50]}"
+                        all_relation_ids.append(rel_id)
+                        all_relation_texts.append(rel_text)
+                        all_relation_embeddings.append(embedding)
+                        all_relation_metadatas.append({
+                            "source": doc["doc_id"],
+                            "description": rel_text
+                        })
+
+                        from skills.graphrag.services import Relation
+                        relation = Relation(
+                            source=doc["doc_id"],
+                            target="",
+                            relation="CO_OCCUR",
+                            confidence=0.5,
+                            doc_id=doc["doc_id"]
                         )
+                        graph_service.relations.append(relation)
 
-                        if graph_service.triple_store and doc["embedding"]:
-                            from skills.graphrag.services.triple_vector_store import EntityInfo
+                    if doc["metadata"]["chunk_index"] not in doc_info.completed_chunks:
+                        doc_info.completed_chunks.append(doc["metadata"]["chunk_index"])
+
+                    total_entities += len(doc["entities"])
+                    total_relations += len(doc["relation_texts"])
+                    doc_info.entities_count = total_entities
+
+                # 批量保存块
+                if all_chunk_ids:
+                    print(f"[DEBUG] 批量保存 {len(all_chunk_ids)} 个块...")
+                    graph_service.collection.add(
+                        ids=all_chunk_ids,
+                        documents=all_chunk_texts,
+                        metadatas=all_chunk_metadatas,
+                        embeddings=all_chunk_embeddings
+                    )
+                    if graph_service.triple_store:
+                        for i in range(len(all_chunk_ids)):
                             graph_service.triple_store.add_chunk(
-                                chunk_id=doc["doc_id"],
-                                text=doc["text"],
-                                embedding=doc["embedding"],
-                                metadata=doc["metadata"]
+                                chunk_id=all_chunk_ids[i],
+                                text=all_chunk_texts[i],
+                                embedding=all_chunk_embeddings[i],
+                                metadata=all_chunk_metadatas[i]
                             )
 
-                        for entity, embedding in zip(doc["entities"], doc["entity_embeddings"]):
-                            graph_service._index_entity(entity, doc["doc_id"])
-                            entity_info = EntityInfo(
-                                name=entity.name,
-                                entity_type=entity.type,
-                                description=f"{entity.name} {entity.type}",
-                                source_ids=[doc["doc_id"]]
-                            )
-                            graph_service.triple_store.add_entity(entity_info, embedding)
+                # 批量保存实体
+                if all_entity_ids:
+                    print(f"[DEBUG] 批量保存 {len(all_entity_ids)} 个实体...")
+                    from skills.graphrag.services.triple_vector_store import EntityInfo
+                    for i in range(len(all_entity_ids)):
+                        entity_info = EntityInfo(
+                            name=all_entity_metadatas[i]["name"],
+                            entity_type=all_entity_metadatas[i]["type"],
+                            description=all_entity_texts[i],
+                            source_ids=[all_entity_metadatas[i]["doc_id"]]
+                        )
+                        graph_service.triple_store.add_entity(entity_info, all_entity_embeddings[i])
 
-                        for rel_text, embedding in zip(doc["relation_texts"], doc["relation_embeddings"]):
-                            from skills.graphrag.services import Relation
-                            relation = Relation(
-                                source=doc["doc_id"],
-                                target="",
-                                relation="CO_OCCUR",
-                                confidence=0.5,
-                                doc_id=doc["doc_id"]
-                            )
-                            from skills.graphrag.services.triple_vector_store import RelationInfo
-                            relation_info = RelationInfo(
-                                source=relation.source,
-                                target=relation.target,
-                                relation=relation.relation,
-                                description=rel_text,
-                                confidence=relation.confidence,
-                                source_ids=[doc["doc_id"]]
-                            )
-                            graph_service.triple_store.add_relation(relation_info, embedding)
-                            graph_service.relations.append(relation)
+                # 批量保存关系
+                if all_relation_ids:
+                    print(f"[DEBUG] 批量保存 {len(all_relation_ids)} 个关系...")
+                    from skills.graphrag.services.triple_vector_store import RelationInfo
+                    for i in range(len(all_relation_ids)):
+                        relation_info = RelationInfo(
+                            source=all_relation_metadatas[i]["source"],
+                            target="",
+                            relation="CO_OCCUR",
+                            description=all_relation_texts[i],
+                            confidence=0.5,
+                            source_ids=[all_relation_metadatas[i]["source"]]
+                        )
+                        graph_service.triple_store.add_relation(relation_info, all_relation_embeddings[i])
 
-                        if doc["metadata"]["chunk_index"] not in doc_info.completed_chunks:
-                            doc_info.completed_chunks.append(doc["metadata"]["chunk_index"])
-
-                        total_entities += len(doc["entities"])
-                        total_relations += len(doc["relation_texts"])
-                        doc_info.entities_count = total_entities
-
-                    # 每批次保存一次
-                    graph_service._save_index()
-                    progress_callback(0.99 + 0.01 * (batch_end) / len(documents_to_add),
-                                    f"保存 {batch_end}/{len(documents_to_add)} 块...")
-                    self._save_document_registry()
+                # 最后一次性保存
+                if graph_service.triple_store:
+                    print("[DEBUG] 批量保存完成，调用 flush...")
+                    graph_service.triple_store.flush()
+                    graph_service.triple_store.set_auto_save(True)
+                graph_service._save_index()
+                self._save_document_registry()
+                progress_callback(1.0, f"保存完成")
 
             # 显示断点续传统计
             if skipped_chunks > 0:
