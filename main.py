@@ -100,6 +100,12 @@ def main():
     parser.add_argument("--skills-dir", "-s", type=str, default="skills", help="Skill 目录")
     parser.add_argument("--interactive", "-i", action="store_true", help="交互式选择模型（忽略.env）")
     parser.add_argument("--auto-index", action="store_true", help="自动索引知识库（默认关闭）")
+    
+    # Harness 架构参数
+    parser.add_argument("--no-harness", action="store_true", help="禁用 Harness 架构，使用传统模式")
+    parser.add_argument("--no-middleware", action="store_true", help="禁用 Harness 中间件链")
+    parser.add_argument("--enhanced-tools", action="store_true", help="启用增强型工具架构")
+    
     args = parser.parse_args()
 
     # 列出模型
@@ -159,10 +165,18 @@ def main():
     # 温度参数
     temperature = args.temperature if args.temperature is not None else config.chat_temperature
 
+    # Harness 架构配置（默认全部启用）
+    use_harness = not args.no_harness
+    use_middleware = not args.no_middleware if use_harness else False
+    use_enhanced_tools = True if use_harness else False  # 默认启用增强工具
+
     # 创建聊天管理器
     chat_manager = OllamaPilotChat(
         skills_dir=args.skills_dir,
-        temperature=temperature
+        temperature=temperature,
+        use_harness=use_harness,
+        use_middleware_chain=use_middleware,
+        use_enhanced_tools=use_enhanced_tools
     )
 
     # 初始化（默认关闭自动索引）

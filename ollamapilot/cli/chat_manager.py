@@ -28,6 +28,9 @@ from ollamapilot import (
 from ollamapilot.agent import OllamaPilotAgent
 from ollamapilot.config import get_config, reload_config
 
+# Harness 架构支持
+from ollamapilot.harness import create_harness_agent, OllamaPilotHarnessAgent
+
 from .session import Session
 from .session_store import SessionStore
 from .history_manager import SimpleHistoryManager
@@ -48,10 +51,22 @@ class OllamaPilotChat:
     # 支持的文档扩展名
     SUPPORTED_EXTENSIONS = {'.txt', '.md', '.pdf', '.docx', '.doc'}
     
-    def __init__(self, skills_dir: str = "skills", temperature: float = 0.7):
+    def __init__(
+        self, 
+        skills_dir: str = "skills", 
+        temperature: float = 0.7,
+        use_harness: bool = True,
+        use_middleware_chain: bool = True,
+        use_enhanced_tools: bool = True  # 默认启用增强工具
+    ):
         self.skills_dir = skills_dir
         self.temperature = temperature
         self.config = get_config()
+        
+        # Harness 架构配置
+        self.use_harness = use_harness
+        self.use_middleware_chain = use_middleware_chain
+        self.use_enhanced_tools = use_enhanced_tools
         
         # 当前状态
         self.current_model: Optional[BaseChatModel] = None
@@ -266,8 +281,19 @@ class OllamaPilotChat:
             if embedding_model:
                 agent_kwargs["embedding_model"] = embedding_model
             
-            self.agent = create_agent(self.current_model, **agent_kwargs)
-            print("✅ Agent 创建完成")
+            # 使用 Harness 架构创建 Agent
+            if self.use_harness:
+                print("🔧 使用 Harness 架构 (v0.6.0)")
+                agent_kwargs.update({
+                    "use_middleware_chain": self.use_middleware_chain,
+                    "use_enhanced_tools": self.use_enhanced_tools,
+                })
+                self.agent = create_harness_agent(self.current_model, **agent_kwargs)
+                print(f"✅ Harness Agent 创建完成 (中间件: {self.use_middleware_chain}, 增强工具: {self.use_enhanced_tools})")
+            else:
+                print("🔧 使用传统架构 (v0.5.0)")
+                self.agent = create_agent(self.current_model, **agent_kwargs)
+                print("✅ Agent 创建完成")
 
             # 初始化对话历史管理器
             self.history_manager = SimpleHistoryManager(

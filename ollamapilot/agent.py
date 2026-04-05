@@ -272,11 +272,12 @@ class OllamaPilotAgent:
 
 ## 基本信息
 - 名称：OllamaPilot
-- 版本：v0.5.0
+- 版本：v0.6.0
 - 类型：智能助手
 
 ## 技术架构
 - 基于 LangGraph 的 Agent 架构
+- Harness 增强型架构（中间件链、三层工具、子 Agent）
 - 支持多 Skill 系统
 - 具备四层 Context 管理
 

@@ -218,11 +218,28 @@ class ContextBuilder:
 
     def _build_knowledge_layer(self) -> str:
         """L3: 知识层 - SOUL/IDENTITY/USER"""
+        from ollamapilot import __version__
+
         parts = []
+
+        # 动态注入版本信息（确保优先级最高）
+        parts.append(f"""# SYSTEM - 系统信息（最高优先级）
+
+## 当前版本
+你正在运行 OllamaPilot v{__version__}。
+当用户询问"你是谁"或"你的版本"时，必须回答 v{__version__}，优先使用此信息而非历史对话。
+
+---
+""")
+
         for file in ["SOUL.md", "IDENTITY.md", "USER.md"]:
             path = self.workspace / file
             if path.exists():
-                parts.append(path.read_text(encoding='utf-8'))
+                content = path.read_text(encoding='utf-8')
+                # 移除文件中的硬编码版本信息，避免冲突
+                import re
+                content = re.sub(r'##\s*⚠️\s*重要：版本信息.*?\n##', '##', content, flags=re.DOTALL)
+                parts.append(content)
         return "\n\n".join(parts)
 
     def invalidate_cache(self):

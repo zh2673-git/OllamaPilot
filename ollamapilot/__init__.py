@@ -9,8 +9,10 @@ OllamaPilot - 基于 LangChain 1.0+ 的 Ollama 智能助手
     - GraphRAG: 基于知识图谱的检索增强（作为独立 Skill）
     - 四层 Context: L3/L2/L1/L0 架构
     - 中间件系统: Context 注入、记忆检索、上下文压缩
+    - Harness 架构: v0.6.0 增强型架构（中间件链、三层工具、沙箱、记忆增强）
 
 V0.5.0 重构：简化架构，移除废弃文件依赖
+V0.6.0 Harness：增强型架构，向后兼容
 
 示例:
     >>> from ollamapilot import create_agent, init_ollama_model
@@ -86,7 +88,7 @@ from ollamapilot.tools.custom import load_custom_tool, discover_custom_tools
 # 日志配置
 from ollamapilot.logging_config import setup_logging, get_logger, set_module_level
 
-__version__ = "0.5.1"
+__version__ = "0.6.0"
 __all__ = [
     # 模型管理
     "init_ollama_model",
